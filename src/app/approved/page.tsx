@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Lead } from "@/types";
-import { CheckCircle2, Copy, ExternalLink, MessageCircle, Mail, Search, Trash2, Edit2, ChevronDown, ChevronUp, AlertTriangle } from "lucide-react";
+import { CheckCircle2, Copy, ExternalLink, MessageCircle, Mail, Search, Trash2, Edit2, ChevronDown, ChevronUp, AlertTriangle, Send, PhoneCall } from "lucide-react";
 
 export default function ApprovedLeadsPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -113,10 +113,57 @@ export default function ApprovedLeadsPage() {
         const prevStatus = l.outreachStatus || { dmStatus: "Not Ready" as const, emailStatus: "Not Ready" as const, channelUsed: "None" as const };
         return {
           ...l,
+          status: "Contacted" as const,
           outreachStatus: {
             ...prevStatus,
             dmStatus: "Sent" as const,
             channelUsed: (prevStatus.emailStatus === "Sent" ? "Both" : "DM") as "None" | "DM" | "Email" | "Both",
+            lastContactedDate: now.toISOString(),
+            followUpDueDate: followUp.toISOString(),
+            leadStatus: "Active" as const,
+          }
+        };
+      }
+      return l;
+    });
+    saveLeads(updated);
+  };
+
+  const handleMarkEmailSent = (id: string) => {
+    const now = new Date();
+    const followUp = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+    const updated = leads.map(l => {
+      if (l.id === id) {
+        const prevStatus = l.outreachStatus || { dmStatus: "Not Ready" as const, emailStatus: "Not Ready" as const, channelUsed: "None" as const };
+        return {
+          ...l,
+          status: "Contacted" as const,
+          outreachStatus: {
+            ...prevStatus,
+            emailStatus: "Sent" as const,
+            channelUsed: (prevStatus.dmStatus === "Sent" ? "Both" : "Email") as "None" | "DM" | "Email" | "Both",
+            lastContactedDate: now.toISOString(),
+            followUpDueDate: followUp.toISOString(),
+            leadStatus: "Active" as const,
+          }
+        };
+      }
+      return l;
+    });
+    saveLeads(updated);
+  };
+
+  const handleMarkContacted = (id: string) => {
+    const now = new Date();
+    const followUp = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+    const updated = leads.map(l => {
+      if (l.id === id) {
+        const prevStatus = l.outreachStatus || { dmStatus: "Not Ready" as const, emailStatus: "Not Ready" as const, channelUsed: "None" as const };
+        return {
+          ...l,
+          status: "Contacted" as const,
+          outreachStatus: {
+            ...prevStatus,
             lastContactedDate: now.toISOString(),
             followUpDueDate: followUp.toISOString(),
             leadStatus: "Active" as const,
@@ -277,6 +324,40 @@ export default function ApprovedLeadsPage() {
                       <a href={lead.websiteUrl} target="_blank" rel="noreferrer" className="p-1.5 text-zinc-500 hover:text-blue-400 hover:bg-zinc-800 rounded transition-colors" title="Open Website"><ExternalLink size={14} /></a>
                       <button onClick={() => handleCopy(lead.websiteUrl || "")} className="p-1.5 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 rounded transition-colors" title="Copy Website"><Copy size={14} /></button>
                     </>
+                  )}
+
+                  {/* External Outreach Actions */}
+                  {lead.status !== "Contacted" && (
+                    <div className="flex items-center gap-1 ml-1 border-l border-zinc-800 pl-2">
+                      <button
+                        onClick={() => handleMarkDmSent(lead.id)}
+                        disabled={lead.outreachStatus?.dmStatus === "Sent"}
+                        className="flex items-center gap-1 px-2 py-1 text-xs font-bold text-violet-400 bg-violet-950/30 border border-violet-900/30 rounded hover:bg-violet-900/40 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        title="Mark DM as sent outside the app"
+                      >
+                        <MessageCircle size={12} /> DM Sent
+                      </button>
+                      <button
+                        onClick={() => handleMarkEmailSent(lead.id)}
+                        disabled={lead.outreachStatus?.emailStatus === "Sent"}
+                        className="flex items-center gap-1 px-2 py-1 text-xs font-bold text-blue-400 bg-blue-950/30 border border-blue-900/30 rounded hover:bg-blue-900/40 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        title="Mark email as sent outside the app"
+                      >
+                        <Mail size={12} /> Email Sent
+                      </button>
+                      <button
+                        onClick={() => handleMarkContacted(lead.id)}
+                        className="flex items-center gap-1 px-2 py-1 text-xs font-bold text-emerald-400 bg-emerald-950/30 border border-emerald-900/30 rounded hover:bg-emerald-900/40 transition-colors"
+                        title="Mark as contacted via any channel outside the app"
+                      >
+                        <PhoneCall size={12} /> Contacted
+                      </button>
+                    </div>
+                  )}
+                  {lead.status === "Contacted" && (
+                    <span className="flex items-center gap-1 ml-1 px-2 py-1 text-xs font-bold text-emerald-500 bg-emerald-950/20 border border-emerald-900/20 rounded">
+                      <CheckCircle2 size={12} /> Contacted
+                    </span>
                   )}
                   
                   {confirmDeleteId === lead.id ? (
@@ -473,12 +554,21 @@ export default function ApprovedLeadsPage() {
                                   <CheckCircle2 size={12}/> Email Sent
                                 </div>
                               ) : (
-                                <button 
-                                  onClick={() => { setEmailContent(lead.outreachDrafts?.email || ""); setEditingEmailId(lead.id); }}
-                                  className="w-full py-1 bg-zinc-100 text-zinc-900 text-xs font-bold rounded hover:bg-white transition-colors"
-                                >
-                                  Review & Send Email
-                                </button>
+                                <div className="flex gap-2 w-full">
+                                  <button 
+                                    onClick={() => { setEmailContent(lead.outreachDrafts?.email || ""); setEditingEmailId(lead.id); }}
+                                    className="flex-1 py-1 bg-zinc-100 text-zinc-900 text-xs font-bold rounded hover:bg-white transition-colors"
+                                  >
+                                    Review & Send Email
+                                  </button>
+                                  <button 
+                                    onClick={() => handleMarkEmailSent(lead.id)}
+                                    className="py-1 px-2.5 bg-blue-950/40 text-blue-400 text-xs font-bold rounded border border-blue-900/30 hover:bg-blue-900/40 transition-colors flex items-center gap-1"
+                                    title="Mark as sent outside the app"
+                                  >
+                                    <Mail size={12} /> Mark Sent
+                                  </button>
+                                </div>
                               )}
                             </>
                           )}
