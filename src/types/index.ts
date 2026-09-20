@@ -7,6 +7,7 @@ export type LeadStatus =
   | "DM Ready"
   | "DM Approved"
   | "DM Sent"
+  | "dm_sent"
   | "Replied"
   | "Follow-up Due"
   | "Closed / Dead";
@@ -34,7 +35,9 @@ export type ReplyStatus =
   | "Maybe later"
   | "Not interested"
   | "No response"
-  | "Closed";
+  | "Closed"
+  | "unknown"
+  | "Unknown";
 
 export interface Lead {
   // Identity
@@ -107,6 +110,13 @@ export interface Lead {
 
   // Primary Status
   status: LeadStatus;
+
+  // Historical & compatibility properties
+  warmingStatus?: string | null;
+  warmingCompleted?: boolean;
+  dmApproved?: boolean;
+  dmSent?: boolean;
+  replyStatus?: string | null;
 }
 
 export interface DashboardMetrics {

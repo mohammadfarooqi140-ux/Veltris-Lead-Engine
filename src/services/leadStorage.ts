@@ -1,4 +1,4 @@
-import { Lead, LeadStatus, DashboardMetrics } from "@/types";
+import { Lead, LeadStatus, DashboardMetrics, PriorContactStatus } from "@/types";
 import { v4 as uuidv4 } from "uuid";
 
 export const STORAGE_KEY_V2 = "vle_queue_v2";
@@ -260,6 +260,104 @@ export function checkAndAdvanceWaitingLeads(leads: Lead[]): { leads: Lead[]; cha
 }
 
 /**
+ * Detects whether a lead record belongs to the imported historical batch
+ */
+export function isHistoricalBatchLead(record: unknown): boolean {
+  if (!record || typeof record !== "object") return false;
+  const r = record as Record<string, unknown>;
+
+  const source = String(r.source_url || r.sourceUrl || r.source || "").toLowerCase();
+  const notes = String(r.research_notes || r.researchNotes || r.notes || "").toLowerCase();
+  const dmSentVal = r.dmSent !== undefined ? r.dmSent : r.dm_sent;
+  const warmingStatusVal = String(r.warmingStatus || r.warming_status || "").toLowerCase();
+  const statusVal = String(r.status || "").toLowerCase();
+
+  const matchesSource = source.includes("attached veltris context pdfs");
+  const matchesNotes = notes.includes("imported from attached pdfs");
+  const matchesDmSent = dmSentVal === true || String(dmSentVal).toLowerCase() === "yes" || String(dmSentVal).toLowerCase() === "true" || dmSentVal === 1;
+  const matchesWarmingStatus = warmingStatusVal === "warming complete" || warmingStatusVal === "complete";
+  const matchesStatus = statusVal === "dm sent" || statusVal === "dm_sent";
+
+  return matchesSource || matchesNotes || matchesDmSent || matchesWarmingStatus || matchesStatus;
+}
+
+/**
+ * Idempotent migration/repair function for imported historical batch records.
+ * Updates matching records to:
+ * {
+ *   status: "dm_sent",
+ *   warmingStatus: "complete",
+ *   warmingCompleted: true,
+ *   dmApproved: true,
+ *   dmSent: true,
+ *   replyStatus: "unknown"
+ * }
+ */
+export function repairHistoricalBatch(leads: Lead[]): { leads: Lead[]; repairedCount: number } {
+  let repairedCount = 0;
+  const now = new Date().toISOString();
+
+  const repairedLeads = leads.map(lead => {
+    const record = lead as unknown as Record<string, unknown>;
+    if (!isHistoricalBatchLead(record)) {
+      return lead;
+    }
+
+    // Check if already in the exact target state
+    const alreadyRepaired =
+      lead.status === "dm_sent" &&
+      record.warmingStatus === "complete" &&
+      record.warmingCompleted === true &&
+      record.dmApproved === true &&
+      record.dmSent === true &&
+      record.replyStatus === "unknown";
+
+    if (alreadyRepaired) {
+      return lead;
+    }
+
+    repairedCount++;
+    return {
+      ...lead,
+      status: "dm_sent" as LeadStatus,
+      warmingStatus: "complete",
+      warmingCompleted: true,
+      dmApproved: true,
+      dmSent: true,
+      replyStatus: "unknown",
+      // Align internal schema properties
+      dm_approved: true,
+      dm_approved_at: lead.dm_approved_at || lead.updated_at || now,
+      dm_sent: true,
+      dm_sent_at: lead.dm_sent_at || lead.updated_at || now,
+      warming_completed_at: lead.warming_completed_at || lead.updated_at || now,
+      follow_completed: true,
+      comment_completed: true,
+      likes_completed: lead.likes_completed || 3,
+      reply_status: "unknown" as const,
+      ready_at: lead.ready_at || lead.warming_completed_at || now,
+      prior_contact_status: "Previously Contacted" as PriorContactStatus,
+      updated_at: now
+    };
+  });
+
+  return { leads: repairedLeads, repairedCount };
+}
+
+/**
+ * Public idempotent repair execution scanning and repairing localStorage.
+ */
+export function repairHistoricalBatchLeads(): { repairedCount: number; total: number } {
+  if (typeof window === "undefined") return { repairedCount: 0, total: 0 };
+  const current = getLeads();
+  const { leads: repaired, repairedCount } = repairHistoricalBatch(current);
+  if (repairedCount > 0) {
+    saveLeads(repaired);
+  }
+  return { repairedCount, total: repaired.length };
+}
+
+/**
  * Primary read method. Migrates legacy data on first run without data loss.
  */
 export function getLeads(): Lead[] {
@@ -301,6 +399,13 @@ export function getLeads(): Lead[] {
       }
 
       // Save to V2 immediately to establish schema
+      localStorage.setItem(STORAGE_KEY_V2, JSON.stringify(leads));
+    }
+
+    // Run idempotent historical batch repair
+    const { leads: repairedLeads, repairedCount } = repairHistoricalBatch(leads);
+    if (repairedCount > 0) {
+      leads = repairedLeads;
       localStorage.setItem(STORAGE_KEY_V2, JSON.stringify(leads));
     }
 
@@ -474,6 +579,7 @@ export function calculateMetrics(leads: Lead[]): DashboardMetrics {
         dmApproved++;
         break;
       case "DM Sent":
+      case "dm_sent":
         dmsSent++;
         // Check if follow-up is due
         if (l.follow_up_date && new Date(l.follow_up_date) <= now) {

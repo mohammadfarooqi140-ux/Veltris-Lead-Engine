@@ -15,7 +15,7 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 
 function getInitialSentLeads(): Lead[] {
   if (typeof window === "undefined") return [];
-  return getLeads().filter(l => l.status === "DM Sent" || l.status === "Replied" || l.dm_sent);
+  return getLeads().filter(l => l.status === "DM Sent" || l.status === "dm_sent" || l.status === "Replied" || l.dm_sent || l.dmSent);
 }
 
 export default function DmSentPage() {
@@ -28,13 +28,14 @@ export default function DmSentPage() {
 
   const refreshLeads = () => {
     const all = getLeads();
-    const sentLeads = all.filter(l => l.status === "DM Sent" || l.status === "Replied" || l.dm_sent);
+    const sentLeads = all.filter(l => l.status === "DM Sent" || l.status === "dm_sent" || l.status === "Replied" || l.dm_sent || l.dmSent);
     setLeads(sentLeads);
   };
 
   const filteredLeads = leads.filter(l => {
     if (filterReply === "all") return true;
-    return l.reply_status === filterReply;
+    const rStatus = (l.replyStatus || l.reply_status || "").toLowerCase();
+    return rStatus === filterReply.toLowerCase();
   });
 
   const handleOpenReplyModal = (lead: Lead) => {
@@ -86,6 +87,7 @@ export default function DmSentPage() {
             className="bg-zinc-900 border border-zinc-800 text-zinc-300 text-xs rounded-lg p-2 focus:ring-rose-500"
           >
             <option value="all">All Reply Statuses ({leads.length})</option>
+            <option value="unknown">Unknown</option>
             <option value="Awaiting reply">Awaiting reply</option>
             <option value="Positive reply">Positive reply</option>
             <option value="Question / needs response">Question / needs response</option>
@@ -122,9 +124,9 @@ export default function DmSentPage() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <h3 className="text-base font-bold text-zinc-100">{lead.business_name}</h3>
                     <StatusBadge status={lead.status} />
-                    {lead.reply_status && (
-                      <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-cyan-950/40 text-cyan-300 border border-cyan-900/40">
-                        {lead.reply_status}
+                    {(lead.replyStatus || lead.reply_status) && (
+                      <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-cyan-950/40 text-cyan-300 border border-cyan-900/40 capitalize">
+                        {lead.replyStatus || lead.reply_status}
                       </span>
                     )}
                   </div>

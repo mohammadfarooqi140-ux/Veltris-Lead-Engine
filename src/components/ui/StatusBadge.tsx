@@ -52,6 +52,7 @@ export function StatusBadge({ status }: { status: LeadStatus | string }) {
         </span>
       );
     case "DM Sent":
+    case "dm_sent":
       return (
         <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-950/40 text-indigo-300 border border-indigo-900/50">
           <span className="w-1.5 h-1.5 rounded-full bg-indigo-400"></span>

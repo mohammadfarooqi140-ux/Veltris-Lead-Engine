@@ -52,7 +52,11 @@ export default function AllLeadsPage() {
     }
 
     if (statusFilter !== "all") {
-      result = result.filter(l => l.status === statusFilter);
+      if (statusFilter === "DM Sent" || statusFilter === "dm_sent") {
+        result = result.filter(l => l.status === "DM Sent" || l.status === "dm_sent" || l.dm_sent || l.dmSent);
+      } else {
+        result = result.filter(l => l.status === statusFilter);
+      }
     }
 
     if (nicheFilter !== "all") {

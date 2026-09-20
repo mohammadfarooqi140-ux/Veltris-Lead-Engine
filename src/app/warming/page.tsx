@@ -41,9 +41,10 @@ export default function WarmingQueuePage() {
     return () => clearInterval(interval);
   }, []);
 
-  const pendingWarmingLeads = leads.filter(l => l.status === "Approved for Warming");
-  const waitingLeads = leads.filter(l => l.status === "Waiting 24 Hours");
-  const readyOrWarmedLeads = leads.filter(l => l.status === "DM Ready" || l.status === "DM Approved" || l.status === "Warming Complete");
+  const isDmSentOrDone = (l: Lead) => l.status === "dm_sent" || l.status === "DM Sent" || l.dm_sent || l.dmSent;
+  const pendingWarmingLeads = leads.filter(l => l.status === "Approved for Warming" && !isDmSentOrDone(l));
+  const waitingLeads = leads.filter(l => l.status === "Waiting 24 Hours" && !isDmSentOrDone(l));
+  const readyOrWarmedLeads = leads.filter(l => l.status === "DM Ready" || l.status === "DM Approved" || l.status === "Warming Complete" || isDmSentOrDone(l));
 
   const handleMarkWarmingComplete = (lead: Lead) => {
     const now = new Date();

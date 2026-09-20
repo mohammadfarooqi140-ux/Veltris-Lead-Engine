@@ -1,5 +1,5 @@
 import { DiscoveryProvider } from "./index";
-import { Lead, AccountType } from "@/types";
+import { Lead, AccountType, ReplyStatus, LeadStatus } from "@/types";
 import { buildProfileUrl, normalizeHandle } from "@/services/leadStorage";
 import Papa from "papaparse";
 import { v4 as uuidv4 } from "uuid";
@@ -22,6 +22,12 @@ export const CRM_FIELDS = [
   { id: "customer_journey_wound", label: "Customer Journey Wound", required: false, aliases: ["customer journey wound", "wound", "problem", "friction", "sales wound"] },
   { id: "source_url", label: "Source URL", required: false, aliases: ["source url", "source", "lead source"] },
   { id: "notes", label: "Notes", required: false, aliases: ["notes", "research notes", "comments"] },
+  { id: "status", label: "Status", required: false, aliases: ["status", "lead status", "pipeline status", "stage"] },
+  { id: "warming_status", label: "Warming Status", required: false, aliases: ["warming status", "warming", "warming state", "warmingstatus"] },
+  { id: "warming_completed", label: "Warming Completed", required: false, aliases: ["warming completed", "warmingcompleted", "warmed"] },
+  { id: "dm_approved", label: "DM Approved", required: false, aliases: ["dm approved", "dmapproved", "approved dm", "dm copy approved"] },
+  { id: "dm_sent", label: "DM Sent", required: false, aliases: ["dm sent", "dmsent", "sent dm", "dm outreach sent"] },
+  { id: "reply_status", label: "Reply Status", required: false, aliases: ["reply status", "replystatus", "reply", "response status", "replied", "outcome"] },
 ];
 
 export interface ImportResult {
@@ -97,13 +103,22 @@ export class CsvProvider implements DiscoveryProvider {
         return col && row[col] !== undefined ? row[col].trim() : "";
       };
 
-      const businessName = getVal("business_name");
+      const findRowVal = (keys: string[]) => {
+        for (const k of keys) {
+          if (row[k] !== undefined && row[k] !== null && String(row[k]).trim() !== "") {
+            return String(row[k]).trim();
+          }
+        }
+        return "";
+      };
+
+      const businessName = getVal("business_name") || findRowVal(["Business Name", "business_name", "Clinic", "clinic", "Name", "Company"]);
       if (!businessName) {
         rowErrors.push("Missing Business Name");
       }
 
-      const rawHandle = getVal("instagram_handle");
-      const rawProfileUrl = getVal("instagram_profile_url");
+      const rawHandle = getVal("instagram_handle") || findRowVal(["Instagram Handle", "instagram_handle", "Instagram", "Handle", "IG"]);
+      const rawProfileUrl = getVal("instagram_profile_url") || findRowVal(["Instagram Profile URL", "instagram_profile_url", "Instagram URL", "Profile URL", "URL"]);
       const normHandle = normalizeHandle(rawHandle) || normalizeHandle(rawProfileUrl);
 
       if (!normHandle && !rawProfileUrl) {
@@ -122,69 +137,140 @@ export class CsvProvider implements DiscoveryProvider {
         return;
       }
 
-      const rawFollowers = getVal("follower_count");
+      const rawFollowers = getVal("follower_count") || findRowVal(["Followers", "follower_count", "Follower Count"]);
       const parsedFollowers = rawFollowers ? parseInt(rawFollowers.replace(/[^\d]/g, ""), 10) : null;
-      const rawAccountType = getVal("account_type").toLowerCase();
+      const rawAccountType = (getVal("account_type") || findRowVal(["Account Type", "account_type", "Type"])).toLowerCase();
       let accountType: AccountType = "Business";
       if (rawAccountType.includes("creator")) accountType = "Creator";
       else if (rawAccountType.includes("unknown")) accountType = "Unknown";
 
+      // Status, Warming & DM columns
+      const rawStatus = getVal("status") || findRowVal(["Status", "status", "Lead Status", "lead_status"]);
+      const rawWarmingStatus = getVal("warming_status") || findRowVal(["Warming Status", "warming_status", "Warming status", "WarmingStatus"]);
+      const rawWarmingCompleted = getVal("warming_completed") || findRowVal(["Warming Completed", "warming_completed", "WarmingCompleted"]);
+      const rawDmApproved = getVal("dm_approved") || findRowVal(["DM Approved", "dm_approved", "Dm Approved", "dmApproved"]);
+      const rawDmSent = getVal("dm_sent") || findRowVal(["DM Sent", "dm_sent", "Dm Sent", "dmSent"]);
+      const rawReplyStatus = getVal("reply_status") || findRowVal(["Reply Status", "reply_status", "Reply status", "replyStatus"]);
+      const rawSourceUrl = getVal("source_url") || findRowVal(["Source URL", "source_url", "Source", "source"]);
+      const rawNotes = getVal("notes") || findRowVal(["Notes", "notes", "Research Notes", "research_notes"]);
+
+      const isTruthy = (val?: string | null) => {
+        if (!val) return false;
+        const s = val.trim().toLowerCase();
+        return s === "yes" || s === "true" || s === "1" || s === "y" || s === "complete" || s === "completed";
+      };
+
+      const normStatus = rawStatus.toLowerCase().trim();
+      const normWarming = rawWarmingStatus.toLowerCase().trim();
+      const normSource = rawSourceUrl.toLowerCase();
+      const normNotes = rawNotes.toLowerCase();
+
+      // Check if lead matches historical batch or is already DM'd
+      const isHistoricalBatch =
+        normSource.includes("attached veltris context pdfs") ||
+        normNotes.includes("imported from attached pdfs") ||
+        normStatus === "dm sent" ||
+        normStatus === "dm_sent" ||
+        isTruthy(rawDmSent) ||
+        (normWarming === "warming complete" && isTruthy(rawDmSent));
+
+      let mappedStatus: LeadStatus = "Discovered";
+      let warmingCompleted = isTruthy(rawWarmingCompleted) || normWarming.includes("complete");
+      let dmApproved = isTruthy(rawDmApproved);
+      let dmSent = isTruthy(rawDmSent);
+      let replyStatus = rawReplyStatus || null;
+
+      if (isHistoricalBatch || normStatus === "dm sent" || normStatus === "dm_sent" || dmSent) {
+        mappedStatus = "dm_sent";
+        warmingCompleted = true;
+        dmApproved = true;
+        dmSent = true;
+        if (!replyStatus || replyStatus.toLowerCase() === "unknown") {
+          replyStatus = "unknown";
+        }
+      } else if (normStatus === "replied") {
+        mappedStatus = "Replied";
+        warmingCompleted = true;
+        dmApproved = true;
+        dmSent = true;
+        replyStatus = replyStatus || "Positive reply";
+      } else if (normStatus === "dm approved" || dmApproved) {
+        mappedStatus = "DM Approved";
+        warmingCompleted = true;
+        dmApproved = true;
+      } else if (normStatus === "dm ready") {
+        mappedStatus = "DM Ready";
+        warmingCompleted = true;
+      } else if (normStatus === "waiting 24 hours") {
+        mappedStatus = "Waiting 24 Hours";
+        warmingCompleted = true;
+      } else if (normStatus === "warming complete" || warmingCompleted) {
+        mappedStatus = "Warming Complete";
+        warmingCompleted = true;
+      } else if (normStatus === "approved for warming" || normStatus === "approved") {
+        mappedStatus = "Approved for Warming";
+      } else if (normStatus === "verified") {
+        mappedStatus = "Verified";
+      } else if (normStatus === "closed / dead" || normStatus === "dead" || normStatus === "closed") {
+        mappedStatus = "Closed / Dead";
+      }
+
       const lead: Lead = {
         id: uuidv4(),
         business_name: businessName,
-        full_name_or_owner: getVal("full_name_or_owner") || null,
-        niche: getVal("niche") || "Aesthetic Clinics",
-        city: getVal("city") || "London",
-        country: getVal("country") || "United Kingdom",
+        full_name_or_owner: getVal("full_name_or_owner") || findRowVal(["Full Name / Owner", "full_name_or_owner", "Owner", "Contact"]) || null,
+        niche: getVal("niche") || findRowVal(["Niche", "niche", "Category"]) || "Aesthetic Clinics",
+        city: getVal("city") || findRowVal(["City", "city", "Town", "Location"]) || "London",
+        country: getVal("country") || findRowVal(["Country", "country"]) || "United Kingdom",
         instagram_handle: finalHandle,
         instagram_profile_url: finalProfileUrl,
-        source_url: getVal("source_url") || null,
+        source_url: rawSourceUrl || null,
         created_at: now,
         updated_at: now,
 
         account_type: accountType,
         follower_count: isNaN(parsedFollowers as number) ? null : parsedFollowers,
-        last_post_date: getVal("last_post_date") || null,
-        last_post_topic: getVal("last_post_topic") || null,
+        last_post_date: getVal("last_post_date") || findRowVal(["Last Post Date", "last_post_date"]) || null,
+        last_post_topic: getVal("last_post_topic") || findRowVal(["Last Post Topic", "last_post_topic"]) || null,
         profile_active: true,
-        uk_verified: (getVal("country") || "United Kingdom").toLowerCase().includes("united kingdom") || (getVal("country") || "UK").toLowerCase() === "uk",
-        booking_link: getVal("booking_link") || null,
-        bio_text: getVal("bio_text") || null,
+        uk_verified: (getVal("country") || findRowVal(["Country", "country"]) || "United Kingdom").toLowerCase().includes("united kingdom") || (getVal("country") || "UK").toLowerCase() === "uk",
+        booking_link: getVal("booking_link") || findRowVal(["Booking URL", "booking_link", "Booking Link"]) || null,
+        bio_text: getVal("bio_text") || findRowVal(["Bio Text", "bio_text", "Bio"]) || null,
         profile_verification_notes: null,
 
-        website_url: getVal("website_url") || null,
-        customer_journey_wound: getVal("customer_journey_wound") || "No instant online consultation booking; client relies solely on manual DMs without automation",
+        website_url: getVal("website_url") || findRowVal(["Website URL", "website_url", "Website"]) || null,
+        customer_journey_wound: getVal("customer_journey_wound") || findRowVal(["Customer Journey Wound", "customer_journey_wound", "Wound"]) || "No instant online consultation booking; client relies solely on manual DMs without automation",
         wound_type: "Booking Friction",
         evidence_urls: [],
         evidence_notes: null,
         fit_status: "Viable",
         confidence: "Medium",
-        prior_contact_status: "None",
+        prior_contact_status: (dmSent || mappedStatus === "dm_sent") ? "Previously Contacted" : "None",
         duplicate_check_status: "Clear",
         rejection_reason: null,
-        research_notes: getVal("notes") || null,
+        research_notes: rawNotes || null,
 
-        warming_approved_at: null,
-        warming_started_at: null,
-        warming_completed_at: null,
-        follow_completed: false,
-        likes_completed: 0,
+        warming_approved_at: (warmingCompleted || mappedStatus === "Approved for Warming") ? now : null,
+        warming_started_at: warmingCompleted ? now : null,
+        warming_completed_at: warmingCompleted ? now : null,
+        follow_completed: warmingCompleted,
+        likes_completed: warmingCompleted ? 3 : 0,
         liked_post_urls: [],
-        comment_completed: false,
+        comment_completed: warmingCompleted,
         comment_text: null,
         comment_post_url: null,
         warming_notes: null,
-        ready_at: null,
+        ready_at: warmingCompleted ? now : null,
 
         dm_draft: null,
-        dm_approved: false,
-        dm_approved_at: null,
-        dm_sent: false,
-        dm_sent_at: null,
+        dm_approved: dmApproved,
+        dm_approved_at: dmApproved ? now : null,
+        dm_sent: dmSent,
+        dm_sent_at: dmSent ? now : null,
         dm_text_used: null,
         sender_ig_account: null,
-        reply_status: null,
-        reply_received_at: null,
+        reply_status: (replyStatus as ReplyStatus) || null,
+        reply_received_at: mappedStatus === "Replied" ? now : null,
         reply_notes: null,
         follow_up_1_date: null,
         follow_up_2_date: null,
@@ -193,7 +279,14 @@ export class CsvProvider implements DiscoveryProvider {
         follow_up_notes: null,
         final_outcome: null,
 
-        status: "Discovered"
+        status: mappedStatus,
+
+        // Explicit compatibility properties requested
+        warmingStatus: warmingCompleted ? "complete" : undefined,
+        warmingCompleted: warmingCompleted || undefined,
+        dmApproved: dmApproved || undefined,
+        dmSent: dmSent || undefined,
+        replyStatus: replyStatus || undefined,
       };
 
       validLeads.push(lead);

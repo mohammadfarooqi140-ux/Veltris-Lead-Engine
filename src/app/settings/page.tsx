@@ -20,6 +20,7 @@ import {
   exportLeadsJson,
   importLeadsJson,
   repairAndMergeLegacyData,
+  repairHistoricalBatchLeads,
   resetDatabase,
   STORAGE_KEY_V2,
   LEGACY_KEY_QUEUE,
@@ -29,12 +30,14 @@ import {
 
 function computeStorageStats() {
   const leads = typeof window !== "undefined" ? getLeads() : [];
+  const isDmSent = (l: (typeof leads)[0]) => l.status === "dm_sent" || l.status === "DM Sent" || l.dm_sent || l.dmSent;
+
   return {
     total: leads.length,
-    verified: leads.filter(l => l.status === "Verified" || l.status === "Approved for Warming").length,
-    waiting24h: leads.filter(l => l.status === "Waiting 24 Hours").length,
-    dmReady: leads.filter(l => l.status === "DM Ready" || l.status === "DM Approved").length,
-    dmSent: leads.filter(l => l.status === "DM Sent").length,
+    verified: leads.filter(l => (l.status === "Verified" || l.status === "Approved for Warming") && !isDmSent(l)).length,
+    waiting24h: leads.filter(l => l.status === "Waiting 24 Hours" && !isDmSent(l)).length,
+    dmReady: leads.filter(l => (l.status === "DM Ready" || l.status === "DM Approved") && !isDmSent(l)).length,
+    dmSent: leads.filter(l => isDmSent(l)).length,
     replied: leads.filter(l => l.status === "Replied").length,
     dead: leads.filter(l => l.status === "Closed / Dead").length,
     hasLegacyQueue: typeof window !== "undefined" ? !!localStorage.getItem(LEGACY_KEY_QUEUE) : false,
@@ -70,6 +73,16 @@ export default function SettingsPage() {
     setStatusMessage({
       type: "success",
       text: `Repair complete. Merged ${res.mergedCount} legacy records, resolved ${res.dedupeCount} duplicates. Total active leads: ${res.total}.`
+    });
+    refreshStats();
+    setTimeout(() => setStatusMessage(null), 6000);
+  };
+
+  const handleRepairHistoricalBatch = () => {
+    const res = repairHistoricalBatchLeads();
+    setStatusMessage({
+      type: "success",
+      text: `Historical batch repair complete: ${res.repairedCount} records verified & set to 'dm_sent' (Warming complete, DM approved & sent). Total leads: ${res.total}.`
     });
     refreshStats();
     setTimeout(() => setStatusMessage(null), 6000);
@@ -208,6 +221,13 @@ export default function SettingsPage() {
                 disabled={isImporting}
               />
             </label>
+
+            <button
+              onClick={handleRepairHistoricalBatch}
+              className="px-4 py-2 bg-indigo-950/40 hover:bg-indigo-900/40 border border-indigo-900/50 text-indigo-300 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <CheckCircle2 size={14} /> Repair Historical Batch (85 Leads)
+            </button>
 
             <button
               onClick={handleRepairLegacy}

@@ -18,10 +18,10 @@ export default function ReportsPage() {
   const total = leads.length;
   const discovered = leads.filter(l => l.status === "Discovered").length;
   const verified = leads.filter(l => l.status !== "Discovered" && l.status !== "Closed / Dead").length;
-  const warmingCompleted = leads.filter(l => l.warming_completed_at || ["Waiting 24 Hours", "DM Ready", "DM Approved", "DM Sent", "Replied"].includes(l.status)).length;
+  const warmingCompleted = leads.filter(l => l.warming_completed_at || l.warmingCompleted || ["Waiting 24 Hours", "DM Ready", "DM Approved", "DM Sent", "dm_sent", "Replied"].includes(l.status)).length;
   const waiting24h = leads.filter(l => l.status === "Waiting 24 Hours").length;
   const dmReady = leads.filter(l => l.status === "DM Ready" || l.status === "DM Approved").length;
-  const dmsSent = leads.filter(l => l.dm_sent || ["DM Sent", "Replied", "Follow-up Due"].includes(l.status)).length;
+  const dmsSent = leads.filter(l => l.dm_sent || l.dmSent || ["DM Sent", "dm_sent", "Replied", "Follow-up Due"].includes(l.status)).length;
   const replies = leads.filter(l => l.status === "Replied" || (l.reply_status && l.reply_status !== "Awaiting reply")).length;
   const positiveReplies = leads.filter(l => l.reply_status === "Positive reply").length;
   const followUpsDue = leads.filter(l => l.status === "Follow-up Due" || (l.follow_up_date && new Date(l.follow_up_date) <= new Date())).length;

@@ -28,13 +28,15 @@ interface NavLinkItem {
 function computeCounts() {
   const leads = typeof window !== "undefined" ? getLeads() : [];
   const now = new Date();
+  const isDmSent = (l: (typeof leads)[0]) => l.status === "dm_sent" || l.status === "DM Sent" || l.dm_sent || l.dmSent;
+
   return {
     verify: leads.filter(l => l.status === "Discovered").length,
-    warming: leads.filter(l => l.status === "Approved for Warming" || l.status === "Waiting 24 Hours").length,
-    dmApproval: leads.filter(l => l.status === "DM Ready" || l.status === "DM Approved").length,
+    warming: leads.filter(l => (l.status === "Approved for Warming" || l.status === "Waiting 24 Hours") && !isDmSent(l)).length,
+    dmApproval: leads.filter(l => (l.status === "DM Ready" || l.status === "DM Approved") && !isDmSent(l)).length,
     followUps: leads.filter(l => {
       if (l.status === "Follow-up Due") return true;
-      if (l.status === "DM Sent" && l.follow_up_date && new Date(l.follow_up_date) <= now) return true;
+      if (isDmSent(l) && l.follow_up_date && new Date(l.follow_up_date) <= now) return true;
       return false;
     }).length
   };
