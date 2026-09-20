@@ -1,213 +1,231 @@
 "use client";
 
 import { useState } from "react";
-import { Upload, FileType, CheckCircle2, AlertCircle, ArrowRight, XCircle, MapPin, Edit3, Search } from "lucide-react";
+import Link from "next/link";
+import {
+  Upload,
+  CheckCircle2,
+  AlertCircle,
+  ArrowRight,
+  XCircle,
+  Edit3,
+  FileSpreadsheet,
+  AlertTriangle,
+  ExternalLink
+} from "lucide-react";
+import { Instagram } from "@/components/ui/InstagramIcon";
 import { CsvProvider, CRM_FIELDS, ImportResult } from "@/providers/discovery/CsvProvider";
 import { ManualProvider } from "@/providers/discovery/ManualProvider";
-import { GoogleMapsProvider } from "@/providers/discovery/GoogleMapsProvider";
+import { addLead, checkDuplicate, getLeads } from "@/services/leadStorage";
+import { Lead, AccountType } from "@/types";
+import { TARGET_NICHES, UK_CITIES } from "@/utils/constants";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 
-type ProviderTab = "csv" | "manual" | "google-maps";
+type ProviderTab = "manual" | "csv";
 type CsvStep = "upload" | "preview" | "summary";
 
-export default function DiscoverPage() {
-  const [activeTab, setActiveTab] = useState<ProviderTab>("csv");
+export default function AddImportPage() {
+  const [activeTab, setActiveTab] = useState<ProviderTab>("manual");
 
   return (
     <div className="p-8 max-w-5xl mx-auto">
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-zinc-100">Discover Leads</h1>
-        <p className="text-sm text-zinc-400 mt-1">Import or find leads to begin the verification and outreach process.</p>
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl font-bold text-zinc-100">Add / Import Leads</h1>
+          <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-rose-950/60 text-rose-300 border border-rose-900/50 flex items-center gap-1">
+            <Instagram size={12} /> Instagram Required
+          </span>
+        </div>
+        <p className="text-sm text-zinc-400 mt-1">
+          Add single aesthetic clinics or import batch CSV lists. Every lead must have a current, verifiable Instagram account.
+        </p>
       </div>
 
       <div className="flex gap-4 mb-8">
-        <ProviderTabButton 
-          active={activeTab === "csv"} 
-          onClick={() => setActiveTab("csv")} 
-          icon={<Upload size={18} />} 
-          title="CSV Import" 
-          description="Import lists from scrapers" 
-        />
-        <ProviderTabButton 
-          active={activeTab === "manual"} 
-          onClick={() => setActiveTab("manual")} 
-          icon={<Edit3 size={18} />} 
-          title="Manual Entry" 
-          description="Add a single lead" 
-        />
-        <ProviderTabButton 
-          active={activeTab === "google-maps"} 
-          onClick={() => setActiveTab("google-maps")} 
-          icon={<MapPin size={18} />} 
-          title="Google Maps Finder" 
-          description="Experimental (API Key Required)" 
-        />
+        <button
+          onClick={() => setActiveTab("manual")}
+          className={`flex-1 flex flex-col items-center justify-center p-4 border rounded-xl transition-all cursor-pointer ${
+            activeTab === "manual"
+              ? "bg-zinc-900 text-zinc-100 border-rose-500/50 shadow-md ring-1 ring-rose-500/30"
+              : "bg-zinc-950 text-zinc-400 border-zinc-800 hover:bg-zinc-900 hover:border-zinc-700"
+          }`}
+        >
+          <Edit3 size={20} className={activeTab === "manual" ? "text-rose-400 mb-1.5" : "text-zinc-500 mb-1.5"} />
+          <h3 className="text-sm font-bold">Manual Lead Entry</h3>
+          <p className="text-xs text-zinc-500 mt-0.5">Add a single verified clinic profile</p>
+        </button>
+
+        <button
+          onClick={() => setActiveTab("csv")}
+          className={`flex-1 flex flex-col items-center justify-center p-4 border rounded-xl transition-all cursor-pointer ${
+            activeTab === "csv"
+              ? "bg-zinc-900 text-zinc-100 border-rose-500/50 shadow-md ring-1 ring-rose-500/30"
+              : "bg-zinc-950 text-zinc-400 border-zinc-800 hover:bg-zinc-900 hover:border-zinc-700"
+          }`}
+        >
+          <Upload size={20} className={activeTab === "csv" ? "text-rose-400 mb-1.5" : "text-zinc-500 mb-1.5"} />
+          <h3 className="text-sm font-bold">CSV Import</h3>
+          <p className="text-xs text-zinc-500 mt-0.5">Import and map scraper CSV exports</p>
+        </button>
       </div>
 
-      {activeTab === "csv" && <CsvImportFlow />}
       {activeTab === "manual" && <ManualEntryFlow />}
-      {activeTab === "google-maps" && <GoogleMapsFlow />}
+      {activeTab === "csv" && <CsvImportFlow />}
     </div>
-  );
-}
-
-function ProviderTabButton({ active, onClick, icon, title, description }: any) {
-  return (
-    <button 
-      onClick={onClick}
-      className={`flex-1 flex flex-col items-center justify-center p-4 border rounded-xl transition-colors
-        ${active ? "bg-zinc-900 text-zinc-100 border-zinc-700 shadow-sm" : "bg-zinc-950 text-zinc-400 border-zinc-800 hover:bg-zinc-900 hover:border-zinc-700"}`}
-    >
-      <div className="mb-2">{icon}</div>
-      <h3 className="text-sm font-bold">{title}</h3>
-      <p className={`text-xs mt-1 ${active ? "text-zinc-400" : "text-zinc-500"}`}>{description}</p>
-    </button>
   );
 }
 
 function ManualEntryFlow() {
-  const [status, setStatus] = useState<"idle" | "processing" | "success" | "error">("idle");
-  const [message, setMessage] = useState("");
-  const provider = new ManualProvider();
+  const [status, setStatus] = useState<"idle" | "processing" | "success" | "duplicate" | "error">("idle");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [duplicateLead, setDuplicateLead] = useState<Lead | null>(null);
+  const [createdLead, setCreatedLead] = useState<Lead | null>(null);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setStatus("processing");
+    setErrorMessage("");
+    setDuplicateLead(null);
+
     const formData = new FormData(e.currentTarget);
-    
+    const provider = new ManualProvider();
+
     try {
-      const params = {
-        businessName: formData.get("businessName") as string,
-        country: formData.get("country") as string,
-        city: formData.get("city") as string,
-        niche: formData.get("niche") as string,
-        websiteUrl: formData.get("websiteUrl") as string,
-        instagramHandle: formData.get("instagramHandle") as string,
-        email: formData.get("email") as string,
-      };
+      const followersRaw = formData.get("follower_count") as string;
+      const parsedFollowers = followersRaw ? parseInt(followersRaw.replace(/[^\d]/g, ""), 10) : undefined;
 
-      const leads = await provider.discover(params);
-      
-      const existing = localStorage.getItem("vle_queue");
-      let allLeads = existing ? JSON.parse(existing) : [];
-      allLeads = [...allLeads, ...leads];
-      localStorage.setItem("vle_queue", JSON.stringify(allLeads));
+      const rawHandle = (formData.get("instagram_handle") as string) || "";
+      const rawProfileUrl = (formData.get("instagram_profile_url") as string) || "";
+      const businessName = (formData.get("business_name") as string) || "";
 
+      if (!rawHandle.trim() && !rawProfileUrl.trim()) {
+        throw new Error("An Instagram handle or profile URL is mandatory for every lead.");
+      }
+
+      // Check duplicates before building lead
+      const existing = getLeads();
+      const dupCheck = checkDuplicate(
+        { instagram_handle: rawHandle, instagram_profile_url: rawProfileUrl, business_name: businessName },
+        existing
+      );
+
+      if (dupCheck.isDuplicate && dupCheck.matchedLead) {
+        setDuplicateLead(dupCheck.matchedLead);
+        setStatus("duplicate");
+        return;
+      }
+
+      const leads = await provider.discover({
+        business_name: businessName,
+        full_name_or_owner: (formData.get("full_name_or_owner") as string) || undefined,
+        niche: (formData.get("niche") as string) || "Aesthetic Clinics",
+        city: (formData.get("city") as string) || "London",
+        country: (formData.get("country") as string) || "United Kingdom",
+        instagram_handle: rawHandle,
+        instagram_profile_url: rawProfileUrl || undefined,
+        website_url: (formData.get("website_url") as string) || undefined,
+        booking_link: (formData.get("booking_link") as string) || undefined,
+        follower_count: parsedFollowers,
+        account_type: (formData.get("account_type") as AccountType) || "Business",
+        last_post_date: (formData.get("last_post_date") as string) || undefined,
+        last_post_topic: (formData.get("last_post_topic") as string) || undefined,
+        bio_text: (formData.get("bio_text") as string) || undefined,
+        customer_journey_wound: (formData.get("customer_journey_wound") as string) || undefined,
+        source_url: (formData.get("source_url") as string) || undefined,
+        research_notes: (formData.get("notes") as string) || undefined,
+      });
+
+      const leadToSave = leads[0];
+      const result = addLead(leadToSave);
+
+      if (!result.success) {
+        if (result.duplicate) {
+          setDuplicateLead(result.duplicate);
+          setStatus("duplicate");
+          return;
+        }
+        throw new Error(result.error || "Failed to add lead");
+      }
+
+      setCreatedLead(leadToSave);
       setStatus("success");
-    } catch (err: any) {
+    } catch (err: unknown) {
       setStatus("error");
-      setMessage(err.message);
+      setErrorMessage(err instanceof Error ? err.message : "Failed to add lead.");
     }
   };
 
-  if (status === "success") {
+  if (status === "duplicate" && duplicateLead) {
     return (
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-12 text-center shadow-sm">
-        <CheckCircle2 className="mx-auto text-emerald-500 mb-4" size={32} />
-        <h3 className="text-xl font-bold text-zinc-100 mb-2">Lead Added Successfully</h3>
-        <p className="text-zinc-400 mb-6">The lead has been sent to the approval queue.</p>
-        <div className="flex gap-4 justify-center">
-          <button onClick={() => setStatus("idle")} className="px-4 py-2 bg-zinc-950 border border-zinc-800 text-zinc-300 rounded-lg text-sm font-medium hover:bg-zinc-800 transition-colors">Add Another</button>
-          <a href="/queue" className="px-6 py-2 bg-zinc-100 text-zinc-900 rounded-lg text-sm font-semibold hover:bg-white transition-colors">Go to Queue</a>
+      <div className="bg-zinc-900 border border-amber-900/60 rounded-xl p-8 shadow-sm">
+        <div className="flex items-center gap-3 mb-4">
+          <AlertTriangle className="text-amber-400" size={28} />
+          <div>
+            <h3 className="text-lg font-bold text-zinc-100">Duplicate Lead Detected</h3>
+            <p className="text-xs text-amber-300 mt-0.5">
+              This Instagram handle or business name already exists in the Veltris database. A second duplicate record will not be created.
+            </p>
+          </div>
         </div>
-      </div>
-    );
-  }
 
-  return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-8 shadow-sm">
-      <h2 className="text-lg font-bold text-zinc-100 mb-6">Add Lead Manually</h2>
-      
-      {status === "error" && (
-        <div className="mb-6 bg-rose-950/50 border border-rose-900 text-rose-400 rounded-lg p-4 flex gap-3">
-          <AlertCircle className="shrink-0" />
-          <p className="text-sm">{message}</p>
+        <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-4 mb-6 space-y-3">
+          <div className="flex justify-between items-center">
+            <div>
+              <p className="text-sm font-bold text-zinc-100">{duplicateLead.business_name}</p>
+              <p className="text-xs text-zinc-400">{duplicateLead.city}, {duplicateLead.country} &middot; {duplicateLead.niche}</p>
+            </div>
+            <StatusBadge status={duplicateLead.status} />
+          </div>
+          <div className="flex items-center gap-3 text-xs text-zinc-400 pt-2 border-t border-zinc-800">
+            <span>IG: <strong className="text-rose-400">{duplicateLead.instagram_handle}</strong></span>
+            {duplicateLead.instagram_profile_url && (
+              <a href={duplicateLead.instagram_profile_url} target="_blank" rel="noreferrer" className="text-blue-400 hover:underline flex items-center gap-1">
+                Open Profile <ExternalLink size={11} />
+              </a>
+            )}
+            <span>Created: {new Date(duplicateLead.created_at).toLocaleDateString()}</span>
+          </div>
         </div>
-      )}
 
-      <form onSubmit={handleSubmit} className="space-y-6">
-        <div className="grid grid-cols-2 gap-6">
-          <div>
-            <label className="block text-sm font-medium text-zinc-300 mb-1">Business Name *</label>
-            <input required name="businessName" type="text" className="w-full bg-zinc-950 text-zinc-100 border-zinc-800 rounded-lg shadow-sm border p-2 focus:ring-zinc-700 focus:border-zinc-700" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-zinc-300 mb-1">Niche *</label>
-            <input required name="niche" type="text" placeholder="e.g. Cafe, Barber" className="w-full bg-zinc-950 text-zinc-100 border-zinc-800 rounded-lg shadow-sm border p-2 focus:ring-zinc-700 focus:border-zinc-700 placeholder-zinc-600" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-zinc-300 mb-1">Country *</label>
-            <input required name="country" type="text" defaultValue="United Kingdom" className="w-full bg-zinc-950 text-zinc-100 border-zinc-800 rounded-lg shadow-sm border p-2 focus:ring-zinc-700 focus:border-zinc-700" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-zinc-300 mb-1">City *</label>
-            <input required name="city" type="text" className="w-full bg-zinc-950 text-zinc-100 border-zinc-800 rounded-lg shadow-sm border p-2 focus:ring-zinc-700 focus:border-zinc-700" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-zinc-300 mb-1">Website URL</label>
-            <input name="websiteUrl" type="url" className="w-full bg-zinc-950 text-zinc-100 border-zinc-800 rounded-lg shadow-sm border p-2 focus:ring-zinc-700 focus:border-zinc-700" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-zinc-300 mb-1">Instagram</label>
-            <input name="instagramHandle" type="text" className="w-full bg-zinc-950 text-zinc-100 border-zinc-800 rounded-lg shadow-sm border p-2 focus:ring-zinc-700 focus:border-zinc-700" />
-          </div>
-          <div className="col-span-2">
-            <label className="block text-sm font-medium text-zinc-300 mb-1">Email</label>
-            <input name="email" type="email" className="w-full bg-zinc-950 text-zinc-100 border-zinc-800 rounded-lg shadow-sm border p-2 focus:ring-zinc-700 focus:border-zinc-700" />
-          </div>
-        </div>
-        <div className="flex justify-end">
-          <button disabled={status === "processing"} type="submit" className="px-6 py-2 bg-zinc-100 text-zinc-900 rounded-lg text-sm font-semibold hover:bg-white disabled:bg-zinc-800 disabled:text-zinc-500 transition-colors">
-            {status === "processing" ? "Saving..." : "Add Lead"}
+        <div className="flex gap-3 justify-end">
+          <button
+            onClick={() => setStatus("idle")}
+            className="px-4 py-2 bg-zinc-800 text-zinc-300 rounded-lg text-xs font-semibold hover:bg-zinc-700"
+          >
+            Go Back & Edit
           </button>
+          <Link
+            href={`/verify`}
+            className="px-5 py-2 bg-rose-500 text-zinc-950 font-semibold rounded-lg text-xs hover:bg-rose-400"
+          >
+            View in Verification Queue
+          </Link>
         </div>
-      </form>
-    </div>
-  );
-}
+      </div>
+    );
+  }
 
-function GoogleMapsFlow() {
-  const [status, setStatus] = useState<"idle" | "processing" | "success" | "error">("idle");
-  const [message, setMessage] = useState("");
-  const [importedCount, setImportedCount] = useState(0);
-  const provider = new GoogleMapsProvider();
-
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setStatus("processing");
-    const formData = new FormData(e.currentTarget);
-    
-    try {
-      const params = {
-        country: formData.get("country") as string,
-        city: formData.get("city") as string,
-        niche: formData.get("niche") as string,
-        resultCount: parseInt(formData.get("resultCount") as string, 10),
-      };
-
-      const leads = await provider.discover(params);
-      
-      const existing = localStorage.getItem("vle_queue");
-      let allLeads = existing ? JSON.parse(existing) : [];
-      allLeads = [...allLeads, ...leads];
-      localStorage.setItem("vle_queue", JSON.stringify(allLeads));
-
-      setImportedCount(leads.length);
-      setStatus("success");
-    } catch (err: any) {
-      setStatus("error");
-      setMessage(err.message);
-    }
-  };
-
-  if (status === "success") {
+  if (status === "success" && createdLead) {
     return (
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-12 text-center shadow-sm">
-        <CheckCircle2 className="mx-auto text-emerald-500 mb-4" size={32} />
-        <h3 className="text-xl font-bold text-zinc-100 mb-2">Discovery Complete!</h3>
-        <p className="text-zinc-400 mb-6">Successfully imported {importedCount} leads from Google Maps.</p>
-        <div className="flex gap-4 justify-center">
-          <button onClick={() => setStatus("idle")} className="px-4 py-2 bg-zinc-950 border border-zinc-800 text-zinc-300 rounded-lg text-sm font-medium hover:bg-zinc-800 transition-colors">Search Again</button>
-          <a href="/queue" className="px-6 py-2 bg-zinc-100 text-zinc-900 rounded-lg text-sm font-semibold hover:bg-white transition-colors">Go to Queue</a>
+      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-10 text-center shadow-sm">
+        <CheckCircle2 className="mx-auto text-emerald-400 mb-3" size={36} />
+        <h3 className="text-xl font-bold text-zinc-100 mb-1">Lead Added Successfully</h3>
+        <p className="text-zinc-400 text-sm mb-6">
+          <strong className="text-zinc-200">{createdLead.business_name}</strong> has been added and queued for ICP verification.
+        </p>
+        <div className="flex gap-3 justify-center">
+          <button
+            onClick={() => setStatus("idle")}
+            className="px-4 py-2 bg-zinc-800 text-zinc-300 rounded-lg text-xs font-semibold hover:bg-zinc-700 transition-colors"
+          >
+            Add Another Lead
+          </button>
+          <Link
+            href="/verify"
+            className="px-5 py-2 bg-zinc-100 text-zinc-950 rounded-lg text-xs font-semibold hover:bg-white transition-colors"
+          >
+            Go to Verification Queue
+          </Link>
         </div>
       </div>
     );
@@ -215,47 +233,144 @@ function GoogleMapsFlow() {
 
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-8 shadow-sm">
-      <div className="flex justify-between items-start mb-6">
+      <div className="flex items-center justify-between mb-6 pb-4 border-b border-zinc-800">
         <div>
-          <h2 className="text-lg font-bold text-zinc-100">Google Maps Finder</h2>
-          <p className="text-sm text-zinc-400">Experimental: Requires GOOGLE_PLACES_API_KEY in settings.</p>
+          <h2 className="text-base font-bold text-zinc-100">Manual Aesthetic Clinic Entry</h2>
+          <p className="text-xs text-zinc-400 mt-0.5">Required fields are marked with an asterisk (*). Email fields are permanently removed.</p>
         </div>
       </div>
-      
+
       {status === "error" && (
-        <div className="mb-6 bg-rose-950/50 border border-rose-900 text-rose-400 rounded-lg p-4 flex gap-3">
-          <AlertCircle className="shrink-0" />
-          <p className="text-sm">{message}</p>
+        <div className="mb-6 bg-rose-950/50 border border-rose-900 text-rose-400 rounded-lg p-4 flex gap-3 text-sm">
+          <AlertCircle className="shrink-0 text-rose-400" size={18} />
+          <p>{errorMessage}</p>
         </div>
       )}
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        <div className="grid grid-cols-2 gap-6">
-          <div>
-            <label className="block text-sm font-medium text-zinc-300 mb-1">Niche *</label>
-            <input required name="niche" type="text" placeholder="e.g. Coffee Shop, Plumber" className="w-full bg-zinc-950 text-zinc-100 border-zinc-800 rounded-lg shadow-sm border p-2 focus:ring-zinc-700 focus:border-zinc-700 placeholder-zinc-600" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-zinc-300 mb-1">City *</label>
-            <input required name="city" type="text" placeholder="e.g. London" className="w-full bg-zinc-950 text-zinc-100 border-zinc-800 rounded-lg shadow-sm border p-2 focus:ring-zinc-700 focus:border-zinc-700 placeholder-zinc-600" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-zinc-300 mb-1">Country *</label>
-            <input required name="country" type="text" defaultValue="United Kingdom" className="w-full bg-zinc-950 text-zinc-100 border-zinc-800 rounded-lg shadow-sm border p-2 focus:ring-zinc-700 focus:border-zinc-700" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-zinc-300 mb-1">Max Results</label>
-            <select name="resultCount" className="w-full bg-zinc-950 text-zinc-100 border-zinc-800 rounded-lg shadow-sm border p-2 focus:ring-zinc-700 focus:border-zinc-700">
-              <option value="10">10 Leads</option>
-              <option value="20">20 Leads</option>
-              <option value="50">50 Leads</option>
-              <option value="100">100 Leads</option>
-            </select>
+        {/* Identity & Location */}
+        <div>
+          <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-500 mb-3">Identity & Location</h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-zinc-300 mb-1">Business Name *</label>
+              <input required name="business_name" type="text" placeholder="e.g. Radiance Aesthetics Clinic" className="w-full bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-lg p-2.5 text-xs focus:ring-rose-500 focus:border-rose-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-zinc-300 mb-1">Owner / Lead Practitioner</label>
+              <input name="full_name_or_owner" type="text" placeholder="e.g. Dr. Sarah Jenkins" className="w-full bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-lg p-2.5 text-xs focus:ring-rose-500 focus:border-rose-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-zinc-300 mb-1">Niche *</label>
+              <select name="niche" defaultValue="Aesthetic Clinics" className="w-full bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-lg p-2.5 text-xs focus:ring-rose-500 focus:border-rose-500">
+                {TARGET_NICHES.map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-zinc-300 mb-1">City *</label>
+              <input required list="uk-cities" name="city" placeholder="e.g. London" className="w-full bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-lg p-2.5 text-xs focus:ring-rose-500 focus:border-rose-500" />
+              <datalist id="uk-cities">
+                {UK_CITIES.map(c => <option key={c} value={c} />)}
+              </datalist>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-zinc-300 mb-1">Country *</label>
+              <input required name="country" defaultValue="United Kingdom" className="w-full bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-lg p-2.5 text-xs focus:ring-rose-500 focus:border-rose-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-zinc-300 mb-1">Website URL</label>
+              <input name="website_url" type="url" placeholder="https://..." className="w-full bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-lg p-2.5 text-xs focus:ring-rose-500 focus:border-rose-500" />
+            </div>
           </div>
         </div>
-        <div className="flex justify-end">
-          <button disabled={status === "processing"} type="submit" className="flex items-center gap-2 px-6 py-2 bg-zinc-100 text-zinc-900 rounded-lg text-sm font-semibold hover:bg-white disabled:bg-zinc-800 disabled:text-zinc-500 transition-colors">
-            {status === "processing" ? "Searching..." : <><Search size={16}/> Search Maps</>}
+
+        {/* Instagram Qualification */}
+        <div className="pt-4 border-t border-zinc-800/80">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-rose-400 mb-3 flex items-center gap-1.5">
+            <Instagram size={14} /> Mandatory Instagram Details
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-zinc-300 mb-1">Instagram Handle *</label>
+              <input required name="instagram_handle" type="text" placeholder="@radiance_clinic" className="w-full bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-lg p-2.5 text-xs focus:ring-rose-500 focus:border-rose-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-zinc-300 mb-1">Instagram Profile URL</label>
+              <input name="instagram_profile_url" type="url" placeholder="https://instagram.com/radiance_clinic" className="w-full bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-lg p-2.5 text-xs focus:ring-rose-500 focus:border-rose-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-zinc-300 mb-1">Account Type</label>
+              <select name="account_type" defaultValue="Business" className="w-full bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-lg p-2.5 text-xs focus:ring-rose-500 focus:border-rose-500">
+                <option value="Business">Business</option>
+                <option value="Creator">Creator</option>
+                <option value="Unknown">Unknown</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-zinc-300 mb-1">Follower Count (ICP: 1,000 - 25,000)</label>
+              <input name="follower_count" type="number" placeholder="e.g. 4800" className="w-full bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-lg p-2.5 text-xs focus:ring-rose-500 focus:border-rose-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-zinc-300 mb-1">External Booking URL</label>
+              <input name="booking_link" type="url" placeholder="Fresha / Treatwell / Linktree URL" className="w-full bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-lg p-2.5 text-xs focus:ring-rose-500 focus:border-rose-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-zinc-300 mb-1">Last Post Date</label>
+              <input name="last_post_date" type="date" className="w-full bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-lg p-2.5 text-xs focus:ring-rose-500 focus:border-rose-500" />
+            </div>
+          </div>
+        </div>
+
+        {/* Commercial Wound & Context */}
+        <div className="pt-4 border-t border-zinc-800/80">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-500 mb-3">Commercial Wound & Analysis</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-zinc-300 mb-1">Customer Journey Wound</label>
+              <textarea
+                name="customer_journey_wound"
+                rows={3}
+                defaultValue="Consultation booking friction: Patients forced to DM back-and-forth for dates with no automated scheduling link."
+                className="w-full bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-lg p-2.5 text-xs focus:ring-rose-500 focus:border-rose-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-zinc-300 mb-1">Last Post Topic / Content Hook</label>
+              <textarea
+                name="last_post_topic"
+                rows={3}
+                placeholder="e.g. Lip filler before/after showcasing natural enhancement technique."
+                className="w-full bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-lg p-2.5 text-xs focus:ring-rose-500 focus:border-rose-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-zinc-300 mb-1">Instagram Bio Text</label>
+              <textarea
+                name="bio_text"
+                rows={2}
+                placeholder="Full bio copy from clinic profile"
+                className="w-full bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-lg p-2.5 text-xs focus:ring-rose-500 focus:border-rose-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-zinc-300 mb-1">Source URL / Research Notes</label>
+              <textarea
+                name="notes"
+                rows={2}
+                placeholder="Source directory, notes on clinic reputation, etc."
+                className="w-full bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-lg p-2.5 text-xs focus:ring-rose-500 focus:border-rose-500"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="flex justify-end pt-4 border-t border-zinc-800">
+          <button
+            type="submit"
+            disabled={status === "processing"}
+            className="px-6 py-2.5 bg-rose-500 hover:bg-rose-400 text-zinc-950 rounded-lg text-xs font-bold transition-colors disabled:bg-zinc-800 disabled:text-zinc-500 cursor-pointer shadow-sm"
+          >
+            {status === "processing" ? "Adding Lead..." : "Save & Queue Lead"}
           </button>
         </div>
       </form>
@@ -265,47 +380,32 @@ function GoogleMapsFlow() {
 
 function CsvImportFlow() {
   const [step, setStep] = useState<CsvStep>("upload");
-  const [file, setFile] = useState<File | null>(null);
-  
-  // Parse state
   const [headers, setHeaders] = useState<string[]>([]);
-  const [rows, setRows] = useState<any[]>([]);
+  const [rows, setRows] = useState<Record<string, string>[]>([]);
   const [mapping, setMapping] = useState<Record<string, string>>({});
-  const [showAdvancedFields, setShowAdvancedFields] = useState(false);
-  
-  // Status state
   const [status, setStatus] = useState<"idle" | "processing" | "success" | "error">("idle");
   const [message, setMessage] = useState("");
-  
-  // Result state
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
 
   const provider = new CsvProvider();
 
-  const isNoisyHeader = (h: string) => {
-    const lower = h.toLowerCase();
-    if (lower.includes("additionalinfo") || lower.includes("accessibility")) return true;
-    if (lower.includes("cid") || lower.includes("placeid") || lower.includes("fid")) return true;
-    if (lower.includes("reviewsperrating") || lower.includes("locatedin")) return true;
-    if (lower.includes("coordinates") || lower.includes("image")) return true;
-    return false;
-  };
-
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const selected = e.target.files[0];
-      setFile(selected);
       setStatus("processing");
       try {
         const { headers, rows } = await provider.parseFile(selected);
+        if (headers.length === 0 || rows.length === 0) {
+          throw new Error("CSV file contains no rows or readable headers.");
+        }
         setHeaders(headers);
         setRows(rows);
         setMapping(provider.guessMapping(headers));
         setStep("preview");
         setStatus("idle");
-      } catch (err: any) {
+      } catch (err: unknown) {
         setStatus("error");
-        setMessage("Failed to parse CSV file: " + err.message);
+        setMessage("Failed to parse CSV: " + (err instanceof Error ? err.message : "Unknown error"));
       }
     }
   };
@@ -319,101 +419,95 @@ function CsvImportFlow() {
     try {
       const result = provider.mapToLeads(rows, mapping);
       setImportResult(result);
-      
+
       if (result.validLeads.length > 0) {
-        const existing = localStorage.getItem("vle_queue");
-        let allLeads = existing ? JSON.parse(existing) : [];
-        allLeads = [...allLeads, ...result.validLeads];
-        localStorage.setItem("vle_queue", JSON.stringify(allLeads));
+        let addedCount = 0;
+        let skippedDupes = 0;
+        for (const lead of result.validLeads) {
+          const res = addLead(lead);
+          if (res.success) addedCount++;
+          else skippedDupes++;
+        }
+
+        result.summary.success = addedCount;
+        if (skippedDupes > 0) {
+          result.errors.push({
+            row: 0,
+            messages: [`${skippedDupes} leads skipped because their Instagram handle or business name already exists in the database.`]
+          });
+        }
       }
-      
+
       setStatus("success");
       setStep("summary");
-    } catch (err: any) {
+    } catch (err: unknown) {
       setStatus("error");
-      setMessage("Failed to import leads: " + err.message);
+      setMessage("Import failed: " + (err instanceof Error ? err.message : "Unknown error"));
     }
   };
 
   return (
-    <>
+    <div className="space-y-6">
       {status === "error" && (
-        <div className="mb-6 bg-rose-950/50 border border-rose-900 text-rose-400 rounded-lg p-4 flex gap-3">
-          <AlertCircle className="shrink-0" />
-          <p className="text-sm">{message}</p>
+        <div className="bg-rose-950/50 border border-rose-900 text-rose-400 rounded-xl p-4 flex gap-3 text-sm">
+          <AlertCircle className="shrink-0 text-rose-400" size={18} />
+          <p>{message}</p>
         </div>
       )}
 
       {step === "upload" && (
         <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-12 text-center shadow-sm">
-          <Upload className="mx-auto h-12 w-12 text-zinc-500" />
-          <h3 className="mt-4 text-sm font-semibold text-zinc-100">Upload CSV file</h3>
-          <p className="mt-2 text-sm text-zinc-400">
-            CSV must include columns like Business Name, Country, City, Niche, and optional URLs.
-          </p>
-          
-          <div className="mt-6">
-            <label htmlFor="file-upload" className="cursor-pointer bg-zinc-800 py-2 px-4 border border-zinc-700 rounded-lg shadow-sm text-sm font-medium text-zinc-300 hover:bg-zinc-700 transition-colors">
-              <span>Select file</span>
-              <input id="file-upload" name="file-upload" type="file" className="sr-only" accept=".csv" onChange={handleFileChange} disabled={status === "processing"} />
-            </label>
+          <div className="w-14 h-14 mx-auto rounded-full bg-zinc-950 border border-zinc-800 flex items-center justify-center text-rose-400 mb-4">
+            <Upload size={24} />
           </div>
-          {status === "processing" && <p className="mt-4 text-sm text-zinc-500 animate-pulse">Parsing CSV...</p>}
-        </div>
-      )}
-
-      {step === "upload" && (
-        <div className="mt-8 bg-blue-950/30 border border-blue-900/50 rounded-xl p-6">
-          <h4 className="text-sm font-bold text-blue-400 mb-2">External Scraper Workflow</h4>
-          <p className="text-sm text-zinc-400 mb-4">
-            You can use free, open-source Google Maps scrapers to generate lead lists. Follow this workflow:
+          <h3 className="text-base font-bold text-zinc-100">Upload Scraper CSV</h3>
+          <p className="mt-1 text-xs text-zinc-400 max-w-md mx-auto">
+            Upload CSV files from Apify, Outscraper, Instagram scrapers, or custom directories. Every row must include an Instagram Handle or Profile URL.
           </p>
-          <div className="flex flex-wrap gap-2 text-xs font-medium text-zinc-300 items-center">
-            <span className="bg-zinc-800 px-2 py-1 rounded-md shadow-sm border border-zinc-700">External scraper</span> <ArrowRight size={14} className="text-blue-500" />
-            <span className="bg-zinc-800 px-2 py-1 rounded-md shadow-sm border border-zinc-700">Export CSV</span> <ArrowRight size={14} className="text-blue-500" />
-            <span className="bg-zinc-800 px-2 py-1 rounded-md shadow-sm border border-zinc-700">Upload CSV</span> <ArrowRight size={14} className="text-blue-500" />
-            <span className="bg-zinc-800 px-2 py-1 rounded-md shadow-sm border border-zinc-700">Score leads</span> <ArrowRight size={14} className="text-blue-500" />
-            <span className="bg-zinc-800 px-2 py-1 rounded-md shadow-sm border border-zinc-700">Generate drafts</span> <ArrowRight size={14} className="text-blue-500" />
-            <span className="bg-zinc-800 px-2 py-1 rounded-md shadow-sm border border-zinc-700">Approve leads</span> <ArrowRight size={14} className="text-blue-500" />
-            <span className="bg-zinc-800 px-2 py-1 rounded-md shadow-sm border border-zinc-700">Track in CRM</span>
+
+          <div className="mt-6">
+            <label htmlFor="csv-file-upload" className="cursor-pointer px-5 py-2.5 bg-rose-500 hover:bg-rose-400 text-zinc-950 rounded-lg font-bold text-xs inline-flex items-center gap-2 transition-colors">
+              <FileSpreadsheet size={16} /> Select CSV File
+              <input
+                id="csv-file-upload"
+                type="file"
+                className="sr-only"
+                accept=".csv"
+                onChange={handleFileChange}
+                disabled={status === "processing"}
+              />
+            </label>
           </div>
         </div>
       )}
 
       {step === "preview" && (
-        <div className="space-y-6">
-          <div className="border-b border-zinc-800 pb-4 flex justify-between items-center">
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 space-y-6">
+          <div className="flex justify-between items-center pb-4 border-b border-zinc-800">
             <div>
-              <h3 className="text-lg font-bold text-zinc-100 flex items-center gap-2">
-                <FileType size={20} className="text-blue-400"/> Data Mapping
-              </h3>
-              <p className="text-xs text-zinc-500 mt-1">Map your CSV columns to lead fields.</p>
+              <h3 className="text-base font-bold text-zinc-100">Column Mapping</h3>
+              <p className="text-xs text-zinc-400 mt-0.5">Map your CSV columns to Veltris CRM fields. Instagram is required.</p>
             </div>
-            <div className="flex items-center gap-4">
-              <label className="flex items-center gap-2 text-xs text-zinc-400 cursor-pointer">
-                <input type="checkbox" checked={showAdvancedFields} onChange={(e) => setShowAdvancedFields(e.target.checked)} className="rounded border-zinc-700 bg-zinc-900 text-zinc-100 focus:ring-zinc-700" />
-                Show all CSV columns
-              </label>
-              <span className="text-sm font-bold text-zinc-100 bg-zinc-800 px-3 py-1 rounded">{rows.length} rows</span>
-            </div>
+            <span className="text-xs font-bold text-zinc-200 bg-zinc-800 px-3 py-1 rounded border border-zinc-700">
+              {rows.length} rows loaded
+            </span>
           </div>
 
-          {/* Required Fields */}
           <div>
-            <h4 className="text-[10px] font-bold uppercase text-zinc-500 tracking-wider mb-3">Required Fields</h4>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              {CRM_FIELDS.filter(f => ["businessName", "city", "country", "niche"].includes(f.id)).map(field => (
-                <div key={field.id}>
-                  <label className="text-xs font-medium text-zinc-300 mb-1 block">
-                    {field.label} {field.id === "businessName" && <span className="text-rose-500">*</span>}
+            <h4 className="text-[10px] font-bold uppercase tracking-wider text-rose-400 mb-3">Required Lead Identifiers</h4>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {CRM_FIELDS.filter(f => f.required).map(field => (
+                <div key={field.id} className="bg-zinc-950 border border-zinc-800 rounded-lg p-2.5">
+                  <label className="text-xs font-semibold text-zinc-300 block mb-1">
+                    {field.label} <span className="text-rose-400">*</span>
                   </label>
-                  <select 
-                    className="w-full bg-zinc-950 border border-zinc-800 text-zinc-100 rounded text-xs p-1.5 focus:ring-zinc-700 focus:border-zinc-700 max-h-48"
+                  <select
                     value={mapping[field.id] || ""}
                     onChange={(e) => handleMappingChange(field.id, e.target.value)}
+                    className="w-full bg-zinc-900 border border-zinc-800 text-zinc-100 text-xs rounded p-1.5 focus:ring-rose-500"
                   >
-                    <option value="">-- Ignore --</option>
-                    {headers.filter(h => showAdvancedFields || !isNoisyHeader(h)).map(h => (
+                    <option value="">-- Select column --</option>
+                    {headers.map(h => (
                       <option key={h} value={h}>{h}</option>
                     ))}
                   </select>
@@ -422,20 +516,21 @@ function CsvImportFlow() {
             </div>
           </div>
 
-          {/* Optional Fields */}
           <div>
-            <h4 className="text-[10px] font-bold uppercase text-zinc-500 tracking-wider mb-3">Optional Fields</h4>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              {CRM_FIELDS.filter(f => !["businessName", "city", "country", "niche"].includes(f.id)).map(field => (
-                <div key={field.id}>
-                  <label className="text-xs font-medium text-zinc-400 mb-1 block">{field.label}</label>
-                  <select 
-                    className="w-full bg-zinc-950 border border-zinc-800 text-zinc-100 rounded text-xs p-1.5 focus:ring-zinc-700 focus:border-zinc-700 max-h-48"
+            <h4 className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 mb-3">Optional Qualification Fields</h4>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {CRM_FIELDS.filter(f => !f.required).map(field => (
+                <div key={field.id} className="bg-zinc-950 border border-zinc-800 rounded-lg p-2.5">
+                  <label className="text-xs font-semibold text-zinc-400 block mb-1">
+                    {field.label}
+                  </label>
+                  <select
                     value={mapping[field.id] || ""}
                     onChange={(e) => handleMappingChange(field.id, e.target.value)}
+                    className="w-full bg-zinc-900 border border-zinc-800 text-zinc-100 text-xs rounded p-1.5 focus:ring-rose-500"
                   >
                     <option value="">-- Ignore --</option>
-                    {headers.filter(h => showAdvancedFields || !isNoisyHeader(h)).map(h => (
+                    {headers.map(h => (
                       <option key={h} value={h}>{h}</option>
                     ))}
                   </select>
@@ -444,127 +539,81 @@ function CsvImportFlow() {
             </div>
           </div>
 
-          {!mapping["businessName"] && (
-             <div className="bg-yellow-500/10 border border-yellow-500/20 text-yellow-500 rounded p-3 flex gap-2 text-xs">
-               <AlertCircle size={14} /> <strong>Warning:</strong> Business Name is not mapped. Leads without a name will be rejected.
-             </div>
-          )}
-
-          {/* Preview Table */}
-          <div className="border border-zinc-800/50 rounded overflow-hidden">
-             <div className="bg-zinc-900/50 px-4 py-2 border-b border-zinc-800/50">
-               <h4 className="text-xs font-semibold text-zinc-400">Preview (First 5 rows)</h4>
-             </div>
-             <div className="overflow-x-auto">
-               <table className="min-w-full divide-y divide-zinc-800/50 text-xs text-left">
-                  <thead>
-                    <tr>
-                      {headers.filter(h => showAdvancedFields || !isNoisyHeader(h)).map(h => (
-                        <th key={h} className="px-3 py-2 font-semibold text-zinc-500 bg-zinc-900/30 border-r border-zinc-800/30 last:border-0 whitespace-nowrap">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-zinc-800/30">
-                    {rows.slice(0, 5).map((row, i) => (
-                      <tr key={i} className="hover:bg-zinc-800/30">
-                        {headers.filter(h => showAdvancedFields || !isNoisyHeader(h)).map(h => (
-                          <td key={h} className="px-3 py-1.5 text-zinc-300 border-r border-zinc-800/20 last:border-0 whitespace-nowrap overflow-hidden text-ellipsis max-w-[200px]">{row[h]}</td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-               </table>
-             </div>
-          </div>
-
-          <div className="flex justify-end gap-3">
-            <button 
-              onClick={() => {setStep("upload"); setFile(null);}}
-              className="px-4 py-2 bg-zinc-800 text-zinc-300 rounded text-sm font-medium hover:bg-zinc-700 transition-colors"
+          <div className="flex justify-end gap-3 pt-4 border-t border-zinc-800">
+            <button
+              onClick={() => setStep("upload")}
+              className="px-4 py-2 bg-zinc-800 text-zinc-300 rounded-lg text-xs font-semibold hover:bg-zinc-700"
             >
               Cancel
             </button>
             <button
               onClick={handleImport}
               disabled={status === "processing"}
-              className="px-6 py-2 bg-zinc-100 text-zinc-900 rounded text-sm font-semibold flex items-center gap-2 hover:bg-white disabled:bg-zinc-800 disabled:text-zinc-500 transition-colors"
+              className="px-6 py-2 bg-rose-500 hover:bg-rose-400 text-zinc-950 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors disabled:bg-zinc-800 disabled:text-zinc-500"
             >
-              {status === "processing" ? "Importing..." : "Confirm & Import"} <ArrowRight size={16} />
+              {status === "processing" ? "Importing..." : "Confirm & Import Leads"} <ArrowRight size={14} />
             </button>
           </div>
         </div>
       )}
 
       {step === "summary" && importResult && (
-        <div className="space-y-6">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-8 shadow-sm">
-            <div className="flex items-center gap-3 mb-6 border-b border-zinc-800 pb-4">
-              <CheckCircle2 className="text-emerald-500" size={28} />
-              <h2 className="text-xl font-bold text-zinc-100">Import Summary</h2>
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-8 space-y-6">
+          <div className="flex items-center gap-3 pb-4 border-b border-zinc-800">
+            <CheckCircle2 size={28} className="text-emerald-400" />
+            <div>
+              <h2 className="text-lg font-bold text-zinc-100">Import Complete</h2>
+              <p className="text-xs text-zinc-400">Processed batch import with strict Instagram verification.</p>
             </div>
-            
-            <div className="grid grid-cols-3 gap-6 mb-8 text-center">
-              <div className="bg-zinc-800/30 border border-zinc-800 rounded-lg p-4">
-                <p className="text-xs font-semibold text-zinc-500 uppercase">Total Rows</p>
-                <p className="text-2xl font-bold text-zinc-100 mt-1">{importResult.summary.total}</p>
-              </div>
-              <div className="bg-emerald-950/30 border border-emerald-900 rounded-lg p-4">
-                <p className="text-xs font-semibold text-emerald-500 uppercase">Successfully Mapped</p>
-                <p className="text-2xl font-bold text-emerald-400 mt-1">{importResult.summary.success}</p>
-              </div>
-              <div className="bg-rose-950/30 border border-rose-900 rounded-lg p-4">
-                <p className="text-xs font-semibold text-rose-500 uppercase">Failed Rows</p>
-                <p className="text-2xl font-bold text-rose-400 mt-1">{importResult.summary.failed}</p>
-              </div>
-            </div>
+          </div>
 
-            {importResult.errors.length > 0 && (
-              <div className="mt-8">
-                <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2 mb-3">
-                  <XCircle size={16} className="text-rose-500" /> Row-Level Errors
-                </h3>
-                <div className="bg-zinc-950 border border-zinc-800 rounded-lg overflow-hidden max-h-64 overflow-y-auto">
-                  <table className="min-w-full divide-y divide-zinc-800 text-sm text-left">
-                    <thead className="bg-zinc-900">
-                      <tr>
-                        <th className="px-4 py-2 font-semibold text-zinc-400 w-24">Row</th>
-                        <th className="px-4 py-2 font-semibold text-zinc-400">Error Messages</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-zinc-800/50">
-                      {importResult.errors.map(err => (
-                        <tr key={err.row} className="hover:bg-zinc-800/50">
-                          <td className="px-4 py-3 font-medium text-zinc-300">Row {err.row}</td>
-                          <td className="px-4 py-3 text-rose-400">
-                            <ul className="list-disc list-inside">
-                              {err.messages.map((msg, i) => <li key={i}>{msg}</li>)}
-                            </ul>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-            
-            <div className="flex gap-4 mt-8 justify-end">
-              <button 
-                onClick={() => {setStep("upload"); setFile(null); setImportResult(null);}}
-                className="px-4 py-2 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-lg text-sm font-medium hover:bg-zinc-800 transition-colors"
-              >
-                Upload Another
-              </button>
-              <a
-                href="/queue"
-                className="px-6 py-2 bg-zinc-100 text-zinc-900 rounded-lg text-sm font-semibold hover:bg-white transition-colors"
-              >
-                Go to Queue
-              </a>
+          <div className="grid grid-cols-3 gap-4 text-center">
+            <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-4">
+              <span className="text-[10px] uppercase font-bold text-zinc-500">Total Rows</span>
+              <p className="text-2xl font-bold text-zinc-100 mt-1">{importResult.summary.total}</p>
             </div>
+            <div className="bg-emerald-950/30 border border-emerald-900/40 rounded-lg p-4">
+              <span className="text-[10px] uppercase font-bold text-emerald-400">Added to Queue</span>
+              <p className="text-2xl font-bold text-emerald-300 mt-1">{importResult.summary.success}</p>
+            </div>
+            <div className="bg-rose-950/30 border border-rose-900/40 rounded-lg p-4">
+              <span className="text-[10px] uppercase font-bold text-rose-400">Rejected / Skipped</span>
+              <p className="text-2xl font-bold text-rose-300 mt-1">{importResult.summary.failed}</p>
+            </div>
+          </div>
+
+          {importResult.errors.length > 0 && (
+            <div className="space-y-2">
+              <h4 className="text-xs font-bold text-zinc-300 flex items-center gap-1.5">
+                <XCircle size={14} className="text-rose-400" /> Row Validation Notes & Errors
+              </h4>
+              <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3 max-h-48 overflow-y-auto text-xs space-y-1.5">
+                {importResult.errors.map((err, idx) => (
+                  <div key={idx} className="text-zinc-400">
+                    {err.row > 0 ? <strong className="text-zinc-300">Row {err.row}: </strong> : null}
+                    <span className="text-rose-400">{err.messages.join("; ")}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-3 pt-4 border-t border-zinc-800">
+            <button
+              onClick={() => setStep("upload")}
+              className="px-4 py-2 bg-zinc-800 text-zinc-300 rounded-lg text-xs font-semibold hover:bg-zinc-700"
+            >
+              Upload Another File
+            </button>
+            <Link
+              href="/verify"
+              className="px-6 py-2 bg-rose-500 hover:bg-rose-400 text-zinc-950 rounded-lg text-xs font-bold transition-colors"
+            >
+              Go to Verification Queue
+            </Link>
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }

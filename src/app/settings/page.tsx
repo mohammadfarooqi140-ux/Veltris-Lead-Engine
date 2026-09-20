@@ -1,349 +1,353 @@
 "use client";
 
-import { Settings as SettingsIcon, KeyRound, Database, Mail, AlertOctagon, Trash2, Download, Wrench, Activity } from "lucide-react";
-import { useState, useEffect } from "react";
-import { Lead } from "@/types";
+import { useState } from "react";
+import {
+  Download,
+  Upload,
+  Wrench,
+  Activity,
+  AlertOctagon,
+  Trash2,
+  Clock,
+  ShieldCheck,
+  CheckCircle2,
+  RefreshCw
+} from "lucide-react";
+import {
+  getLeads,
+  getSettings,
+  saveSettings,
+  exportLeadsJson,
+  importLeadsJson,
+  repairAndMergeLegacyData,
+  resetDatabase,
+  STORAGE_KEY_V2,
+  LEGACY_KEY_QUEUE,
+  LEGACY_KEY_APPROVED,
+  LEGACY_KEY_CRM
+} from "@/services/leadStorage";
+
+function computeStorageStats() {
+  const leads = typeof window !== "undefined" ? getLeads() : [];
+  return {
+    total: leads.length,
+    verified: leads.filter(l => l.status === "Verified" || l.status === "Approved for Warming").length,
+    waiting24h: leads.filter(l => l.status === "Waiting 24 Hours").length,
+    dmReady: leads.filter(l => l.status === "DM Ready" || l.status === "DM Approved").length,
+    dmSent: leads.filter(l => l.status === "DM Sent").length,
+    replied: leads.filter(l => l.status === "Replied").length,
+    dead: leads.filter(l => l.status === "Closed / Dead").length,
+    hasLegacyQueue: typeof window !== "undefined" ? !!localStorage.getItem(LEGACY_KEY_QUEUE) : false,
+    hasLegacyApproved: typeof window !== "undefined" ? !!localStorage.getItem(LEGACY_KEY_APPROVED) : false,
+    hasLegacyCrm: typeof window !== "undefined" ? !!localStorage.getItem(LEGACY_KEY_CRM) : false,
+  };
+}
 
 export default function SettingsPage() {
-  const [resetStatus, setResetStatus] = useState<string | null>(null);
-  const [isSendingTest, setIsSendingTest] = useState(false);
-  const [testEmailStatus, setTestEmailStatus] = useState<{success: boolean, message: string} | null>(null);
-  const [repairStatus, setRepairStatus] = useState<string | null>(null);
-  const [dataHealth, setDataHealth] = useState({
-    total: 0,
-    approved: 0,
-    contacted: 0,
-    queue: 0,
-    replied: 0,
-    dead: 0,
-    followUpsDue: 0,
-    storageKey: "vle_queue",
-    hasLegacyApproved: false,
-    hasLegacyCrm: false,
-  });
+  const [statusMessage, setStatusMessage] = useState<{ type: "success" | "error" | "info"; text: string } | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [resetModalOpen, setResetModalOpen] = useState(false);
+  const [resetConfirmationInput, setResetConfirmationInput] = useState("");
 
-  useEffect(() => {
-    refreshDataHealth();
-  }, []);
+  const [waitingHoursInput, setWaitingHoursInput] = useState(() => (typeof window !== "undefined" ? getSettings().waitingPeriodHours || 24 : 24));
 
-  const refreshDataHealth = () => {
-    const raw = localStorage.getItem("vle_queue");
-    const leads: Lead[] = raw ? JSON.parse(raw) : [];
-    const now = new Date();
+  const [storageStats, setStorageStats] = useState(computeStorageStats);
 
-    const followUpsDue = leads.filter(l => {
-      if (l.status === "Dead" || l.status === "Replied") return false;
-      if (l.outreachStatus?.leadStatus === "Replied" || l.outreachStatus?.leadStatus === "Dead") return false;
-      const sent = l.outreachStatus?.dmStatus === "Sent" || l.outreachStatus?.emailStatus === "Sent";
-      if (!sent) return false;
-      if (l.outreachStatus?.followUpDueDate) return new Date(l.outreachStatus.followUpDueDate) <= now;
-      if (l.outreachStatus?.lastContactedDate) {
-        return new Date(new Date(l.outreachStatus.lastContactedDate).getTime() + 3*24*60*60*1000) <= now;
-      }
-      return false;
-    }).length;
-
-    setDataHealth({
-      total: leads.length,
-      approved: leads.filter(l => l.status === "Approved").length,
-      contacted: leads.filter(l => l.status === "Contacted").length,
-      queue: leads.filter(l => l.status === "New" || l.status === "Research Complete").length,
-      replied: leads.filter(l => l.status === "Replied" || l.outreachStatus?.leadStatus === "Replied").length,
-      dead: leads.filter(l => l.status === "Dead" || l.outreachStatus?.leadStatus === "Dead").length,
-      followUpsDue,
-      storageKey: "vle_queue",
-      hasLegacyApproved: !!localStorage.getItem("vle_approved"),
-      hasLegacyCrm: !!localStorage.getItem("vle_crm"),
-    });
+  const refreshStats = () => {
+    setStorageStats(computeStorageStats());
   };
 
-  const handleSendTestEmail = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSaveWaitingHours = (e: React.FormEvent) => {
     e.preventDefault();
-    setIsSendingTest(true);
-    setTestEmailStatus(null);
-    const formData = new FormData(e.currentTarget);
-    const toEmail = formData.get("toEmail") as string;
+    const hours = Math.max(1, Number(waitingHoursInput));
+    saveSettings({ waitingPeriodHours: hours });
+    setStatusMessage({ type: "success", text: `Waiting period updated to ${hours} hours.` });
+    setTimeout(() => setStatusMessage(null), 4000);
+  };
 
-    try {
-      const response = await fetch("/api/outreach/email", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          to: toEmail,
-          subject: "Veltris Lead Engine - Test Email",
-          content: "This is a test email from the Veltris Lead Engine. If you are reading this, your SMTP settings are configured correctly!",
-        })
-      });
+  const handleRepairLegacy = () => {
+    const res = repairAndMergeLegacyData();
+    setStatusMessage({
+      type: "success",
+      text: `Repair complete. Merged ${res.mergedCount} legacy records, resolved ${res.dedupeCount} duplicates. Total active leads: ${res.total}.`
+    });
+    refreshStats();
+    setTimeout(() => setStatusMessage(null), 6000);
+  };
 
-      const data = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(data.message || "Failed to send email");
+  const handleImportJsonFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const file = e.target.files[0];
+      setIsImporting(true);
+      try {
+        const res = await importLeadsJson(file);
+        setStatusMessage({
+          type: "success",
+          text: `Successfully imported JSON backup: ${res.added} new leads added, ${res.skippedDuplicates} duplicates safely skipped.`
+        });
+        refreshStats();
+      } catch (err: unknown) {
+        setStatusMessage({
+          type: "error",
+          text: "Import failed: " + (err instanceof Error ? err.message : "Invalid JSON file")
+        });
+      } finally {
+        setIsImporting(false);
       }
-
-      setTestEmailStatus({ success: true, message: "Test email sent successfully!" });
-    } catch (err: any) {
-      setTestEmailStatus({ success: false, message: err.message });
-    } finally {
-      setIsSendingTest(false);
     }
   };
 
-  const handleExportJson = () => {
-    const raw = localStorage.getItem("vle_queue");
-    const leads: Lead[] = raw ? JSON.parse(raw) : [];
-    const blob = new Blob([JSON.stringify(leads, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `veltris_leads_export_${new Date().toISOString().slice(0,10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const handleRepair = () => {
-    const raw = localStorage.getItem("vle_queue");
-    let canonical: Lead[] = raw ? JSON.parse(raw) : [];
-    let mergedCount = 0;
-
-    // Merge vle_approved
-    const approvedRaw = localStorage.getItem("vle_approved");
-    if (approvedRaw) {
-      const legacy: Lead[] = JSON.parse(approvedRaw);
-      const existingIds = new Set(canonical.map(l => l.id));
-      for (const lead of legacy) {
-        if (!existingIds.has(lead.id)) {
-          canonical.push(lead);
-          mergedCount++;
-        }
-      }
-      localStorage.removeItem("vle_approved");
+  const handleConfirmReset = () => {
+    if (resetConfirmationInput !== "RESET") {
+      alert("Please type RESET in capital letters to confirm database purge.");
+      return;
     }
 
-    // Merge vle_crm
-    const crmRaw = localStorage.getItem("vle_crm");
-    if (crmRaw) {
-      const legacy: Lead[] = JSON.parse(crmRaw);
-      const existingIds = new Set(canonical.map(l => l.id));
-      for (const lead of legacy) {
-        if (!existingIds.has(lead.id)) {
-          canonical.push(lead);
-          mergedCount++;
-        }
-      }
-      localStorage.removeItem("vle_crm");
-    }
-
-    // Deduplicate by ID (keep newest by preserving last occurrence)
-    const deduped = Array.from(new Map(canonical.map(l => [l.id, l])).values());
-    const removedDupes = canonical.length - deduped.length;
-
-    // Ensure safe defaults for outreachStatus
-    const repaired = deduped.map(l => ({
-      ...l,
-      outreachStatus: {
-        dmStatus: "Not Ready" as const,
-        emailStatus: "Not Ready" as const,
-        channelUsed: "None" as const,
-        ...l.outreachStatus,
-      }
-    }));
-
-    localStorage.setItem("vle_queue", JSON.stringify(repaired));
-    setRepairStatus(`Repair complete. Merged ${mergedCount} legacy leads. Removed ${removedDupes} duplicates. Total: ${repaired.length} leads.`);
-    refreshDataHealth();
-    setTimeout(() => setRepairStatus(null), 8000);
-  };
-
-  const handleReset = () => {
-    if (confirm("Are you sure you want to delete ALL leads and reset the database? This action cannot be undone.")) {
-      localStorage.removeItem("vle_queue");
-      localStorage.removeItem("vle_approved");
-      localStorage.removeItem("vle_crm");
-      setResetStatus("Database has been completely reset. All leads cleared.");
-      refreshDataHealth();
-      setTimeout(() => setResetStatus(null), 5000);
-    }
+    resetDatabase();
+    setResetModalOpen(false);
+    setResetConfirmationInput("");
+    setStatusMessage({
+      type: "info",
+      text: "Database has been completely purged. All leads cleared from localStorage."
+    });
+    refreshStats();
   };
 
   return (
-    <div className="p-8 max-w-4xl mx-auto">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-zinc-100 flex items-center gap-2">
-          <SettingsIcon size={24} /> Settings & Setup
-        </h1>
-        <p className="text-sm text-zinc-400 mt-1">Environment configuration and system administration.</p>
+    <div className="p-8 max-w-4xl mx-auto space-y-8">
+      {/* Header */}
+      <div className="pb-4 border-b border-zinc-800">
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl font-bold text-zinc-100 tracking-tight">Settings & System Health</h1>
+          <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-zinc-800 text-zinc-300 border border-zinc-700">
+            Schema v2 &middot; Instagram CRM
+          </span>
+        </div>
+        <p className="text-xs text-zinc-400 mt-1">
+          Local storage health, JSON backups, deduplication repair, and ICP defaults. Veltris Lead Engine is your exclusive master database.
+        </p>
       </div>
 
-      {resetStatus && (
-        <div className="mb-6 bg-emerald-950/50 border border-emerald-900 text-emerald-400 rounded-md p-4 text-sm font-medium">
-          {resetStatus}
-        </div>
-      )}
-      {repairStatus && (
-        <div className="mb-6 bg-blue-950/50 border border-blue-900 text-blue-400 rounded-md p-4 text-sm font-medium">
-          {repairStatus}
+      {statusMessage && (
+        <div
+          className={`p-4 rounded-xl text-xs font-semibold flex items-center gap-2 ${
+            statusMessage.type === "success"
+              ? "bg-emerald-950/40 border border-emerald-900/60 text-emerald-300"
+              : statusMessage.type === "error"
+              ? "bg-rose-950/40 border border-rose-900/60 text-rose-300"
+              : "bg-blue-950/40 border border-blue-900/60 text-blue-300"
+          }`}
+        >
+          <CheckCircle2 size={16} />
+          <span>{statusMessage.text}</span>
         </div>
       )}
 
-      {/* Data Health */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-sm mb-8">
-        <div className="border-b border-zinc-800 bg-zinc-800/30 p-4">
-          <h2 className="text-sm font-semibold text-zinc-100 flex items-center gap-2"><Activity size={16} className="text-emerald-400" /> Data Health</h2>
-          <p className="text-xs text-zinc-400 mt-1">Live view of lead storage state.</p>
+      {/* Storage Health */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-sm">
+        <div className="p-4 border-b border-zinc-800 bg-zinc-800/30 flex justify-between items-center">
+          <div>
+            <h2 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
+              <Activity size={16} className="text-emerald-400" /> Database & Storage Health
+            </h2>
+            <p className="text-xs text-zinc-400">Live inspection of client-side database records.</p>
+          </div>
+          <button
+            onClick={refreshStats}
+            className="p-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors"
+          >
+            <RefreshCw size={13} /> Refresh
+          </button>
         </div>
-        <div className="p-6">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-            <HealthStat label="Total Leads" value={dataHealth.total} />
-            <HealthStat label="Approved" value={dataHealth.approved} color="text-emerald-400" />
-            <HealthStat label="Contacted" value={dataHealth.contacted} color="text-blue-400" />
-            <HealthStat label="In Queue" value={dataHealth.queue} color="text-yellow-400" />
-            <HealthStat label="Follow Ups Due" value={dataHealth.followUpsDue} color="text-orange-400" />
-            <HealthStat label="Replied" value={dataHealth.replied} color="text-cyan-400" />
-            <HealthStat label="Dead" value={dataHealth.dead} color="text-rose-400" />
-            <div className="bg-zinc-800/30 rounded p-3">
-              <p className="text-[10px] font-bold uppercase text-zinc-500">Storage Key</p>
-              <p className="text-xs font-mono text-zinc-300 mt-1">{dataHealth.storageKey}</p>
+
+        <div className="p-6 space-y-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <HealthCard label="Total Leads" value={storageStats.total} />
+            <HealthCard label="Verified / In Queue" value={storageStats.verified} color="text-blue-400" />
+            <HealthCard label="Waiting 24h" value={storageStats.waiting24h} color="text-purple-400" />
+            <HealthCard label="DM Ready" value={storageStats.dmReady} color="text-emerald-400" />
+            <HealthCard label="DMs Sent" value={storageStats.dmSent} color="text-indigo-400" />
+            <HealthCard label="Replies" value={storageStats.replied} color="text-cyan-400" />
+            <HealthCard label="Closed / Dead" value={storageStats.dead} color="text-zinc-500" />
+            <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
+              <span className="text-[10px] uppercase font-bold text-zinc-500">Storage Version</span>
+              <p className="text-xs font-mono font-bold text-rose-400 mt-1">{STORAGE_KEY_V2}</p>
             </div>
           </div>
 
-          {(dataHealth.hasLegacyApproved || dataHealth.hasLegacyCrm) && (
-            <div className="bg-yellow-500/10 border border-yellow-500/20 text-yellow-500 rounded p-3 flex gap-2 text-xs mb-4">
-              <AlertOctagon size={14} className="shrink-0 mt-0.5" />
-              Legacy storage keys detected ({dataHealth.hasLegacyApproved && "vle_approved"}{dataHealth.hasLegacyApproved && dataHealth.hasLegacyCrm && ", "}{dataHealth.hasLegacyCrm && "vle_crm"}). Run Repair to merge.
+          {(storageStats.hasLegacyQueue || storageStats.hasLegacyApproved || storageStats.hasLegacyCrm) && (
+            <div className="bg-amber-950/30 border border-amber-900/50 rounded-lg p-3 text-xs text-amber-300 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <AlertOctagon size={16} className="text-amber-400 shrink-0" />
+                <span>Legacy data keys detected from prior version. Click Repair to merge safely without duplicate records.</span>
+              </div>
+              <button
+                onClick={handleRepairLegacy}
+                className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold rounded text-xs transition-colors shrink-0"
+              >
+                Run Merge & Dedupe
+              </button>
             </div>
           )}
 
-          <div className="flex gap-3">
-            <button onClick={handleExportJson} className="flex items-center gap-2 px-4 py-2 bg-zinc-800 text-zinc-300 rounded text-sm font-medium hover:bg-zinc-700 transition-colors">
-              <Download size={14} /> Export JSON
+          <div className="flex flex-wrap gap-3 pt-2">
+            <button
+              onClick={exportLeadsJson}
+              className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <Download size={14} /> Export JSON Backup
             </button>
-            <button onClick={handleRepair} className="flex items-center gap-2 px-4 py-2 bg-blue-950/30 border border-blue-900/30 text-blue-400 rounded text-sm font-medium hover:bg-blue-900/40 transition-colors">
-              <Wrench size={14} /> Repair / Merge Legacy Data
-            </button>
-            <button onClick={refreshDataHealth} className="flex items-center gap-2 px-4 py-2 bg-zinc-800 text-zinc-400 rounded text-sm font-medium hover:bg-zinc-700 transition-colors">
-              <Activity size={14} /> Refresh
+
+            <label className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer">
+              <Upload size={14} /> Import JSON Backup
+              <input
+                type="file"
+                accept=".json"
+                className="sr-only"
+                onChange={handleImportJsonFile}
+                disabled={isImporting}
+              />
+            </label>
+
+            <button
+              onClick={handleRepairLegacy}
+              className="px-4 py-2 bg-blue-950/40 hover:bg-blue-900/40 border border-blue-900/50 text-blue-300 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <Wrench size={14} /> Repair & Merge Legacy Data
             </button>
           </div>
         </div>
       </div>
 
-      {/* Environment Variables */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-sm mb-8">
-        <div className="border-b border-zinc-800 bg-zinc-800/30 p-4">
-          <h2 className="text-sm font-semibold text-zinc-100">Environment Variables</h2>
-          <p className="text-xs text-zinc-400 mt-1">
-            Create a <code className="bg-zinc-800 px-1 py-0.5 rounded text-zinc-300">.env.local</code> file in the root of the project.
-          </p>
+      {/* ICP Configuration & Delay Settings */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-sm">
+        <div className="p-4 border-b border-zinc-800 bg-zinc-800/30">
+          <h2 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
+            <ShieldCheck size={16} className="text-rose-400" /> Outreach & Qualification Parameters
+          </h2>
+          <p className="text-xs text-zinc-400">Configure operational warming delay and default ICP target values.</p>
         </div>
 
-        <div className="p-6 space-y-8">
-          {/* Email Config */}
-          <div>
-            <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2 mb-3">
-              <Mail size={16} className="text-orange-400" /> Email Sending (SMTP)
-            </h3>
-            <div className="bg-zinc-800/30 border border-zinc-800 rounded-lg p-4 space-y-4 mb-4">
-              <div className="flex flex-col">
-                <span className="font-mono text-sm font-bold text-zinc-200">EMAIL_USER</span>
-                <span className="text-xs text-zinc-400">Your email address (e.g., hello@veltris.uk)</span>
-              </div>
-              <div className="flex flex-col">
-                <span className="font-mono text-sm font-bold text-zinc-200">EMAIL_APP_PASSWORD</span>
-                <span className="text-xs text-zinc-400">Your generated Google App Password (not your main password).</span>
-              </div>
-            </div>
-            <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-sm p-4">
-              <h4 className="text-sm font-bold text-zinc-100 mb-2">Send Test Email</h4>
-              <p className="text-xs text-zinc-400 mb-4">Verify your environment variables and SMTP connection.</p>
-              
-              {testEmailStatus && (
-                <div className={`mb-4 p-3 rounded text-sm ${testEmailStatus.success ? 'bg-emerald-950/50 text-emerald-400 border border-emerald-900' : 'bg-rose-950/50 text-rose-400 border border-rose-900'}`}>
-                  {testEmailStatus.message}
-                </div>
-              )}
-
-              <form onSubmit={handleSendTestEmail} className="flex gap-2">
-                <input required name="toEmail" type="email" placeholder="Recipient (your email)" className="flex-1 text-sm bg-zinc-950 text-zinc-100 p-2 border border-zinc-800 rounded-lg focus:ring-zinc-700 focus:border-zinc-700 placeholder-zinc-600" />
-                <button disabled={isSendingTest} type="submit" className="px-4 py-2 bg-zinc-100 text-zinc-900 rounded-lg text-sm font-semibold disabled:bg-zinc-800 disabled:text-zinc-500 hover:bg-white transition-colors">
-                  {isSendingTest ? "Sending..." : "Send Test"}
+        <div className="p-6 space-y-6">
+          <form onSubmit={handleSaveWaitingHours} className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+            <div>
+              <label className="block text-zinc-300 font-semibold mb-1 flex items-center gap-1">
+                <Clock size={13} className="text-purple-400" /> Mandatory Warming Delay (Hours)
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  min="1"
+                  max="168"
+                  value={waitingHoursInput}
+                  onChange={e => setWaitingHoursInput(Number(e.target.value))}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2 text-zinc-100"
+                />
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-semibold transition-colors shrink-0 cursor-pointer"
+                >
+                  Save
                 </button>
-              </form>
+              </div>
+              <p className="text-[11px] text-zinc-500 mt-1">Default is 24 hours. Leeway allows adjusting for rapid staging test runs.</p>
             </div>
-          </div>
 
-          {/* API Providers */}
-          <div>
-            <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2 mb-3">
-              <KeyRound size={16} className="text-blue-400" /> API Providers
-            </h3>
-            <div className="bg-zinc-800/30 border border-zinc-800 rounded-lg p-4 space-y-4">
-              <div className="flex flex-col">
-                <span className="font-mono text-sm font-bold text-zinc-200 flex items-center gap-2">
-                  GOOGLE_PLACES_API_KEY <span className="bg-blue-950 text-blue-400 border border-blue-900 text-[10px] px-1.5 py-0.5 rounded font-semibold tracking-wider">OPTIONAL</span>
-                </span>
-                <span className="text-xs text-zinc-400">Required for the Google Maps Finder. If not provided, use CSV Import or Manual Entry.</span>
-              </div>
+            <div>
+              <label className="block text-zinc-300 font-semibold mb-1">Target Geographic Service Area</label>
+              <input
+                type="text"
+                disabled
+                value="United Kingdom (London, Manchester, Birmingham, Leeds, etc.)"
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2 text-zinc-400 cursor-not-allowed"
+              />
+              <p className="text-[11px] text-zinc-500 mt-1">Veltris Lead Engine ICP is strictly configured for UK Aesthetic Clinics.</p>
             </div>
-          </div>
-
-          {/* CRM Config */}
-          <div>
-            <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2 mb-3">
-              <Database size={16} className="text-emerald-400" /> Google Sheets CRM Integration
-            </h3>
-            <div className="bg-zinc-800/30 border border-zinc-800 rounded-lg p-4 space-y-4">
-              <div className="flex flex-col">
-                <span className="font-mono text-sm font-bold text-zinc-200">GOOGLE_SHEET_ID</span>
-                <span className="text-xs text-zinc-400">The unique ID found in your Google Sheet URL.</span>
-              </div>
-              <div className="flex flex-col">
-                <span className="font-mono text-sm font-bold text-zinc-200">GOOGLE_SERVICE_ACCOUNT_EMAIL</span>
-                <span className="text-xs text-zinc-400">Service account email generated from Google Cloud Console.</span>
-              </div>
-              <div className="flex flex-col">
-                <span className="font-mono text-sm font-bold text-zinc-200">GOOGLE_PRIVATE_KEY</span>
-                <span className="text-xs text-zinc-400">Service account private key. Enclose the string in quotes to handle newline (\n) characters properly.</span>
-              </div>
-            </div>
-            <p className="text-xs text-zinc-500 mt-2">
-              Note: You must share the target Google Sheet with the Service Account Email for it to have write access.
-            </p>
-          </div>
+          </form>
         </div>
       </div>
 
-      {/* Danger Zone */}
-      <div className="bg-zinc-900 border border-rose-900/50 rounded-xl overflow-hidden shadow-sm">
-        <div className="border-b border-rose-900/50 bg-rose-950/20 p-4">
-          <h2 className="text-sm font-semibold text-rose-500 flex items-center gap-2">
-            <AlertOctagon size={18} /> Danger Zone
+      {/* Danger Zone: Reset Database */}
+      <div className="bg-zinc-900 border border-rose-950 rounded-xl overflow-hidden shadow-sm">
+        <div className="p-4 border-b border-rose-950 bg-rose-950/20">
+          <h2 className="text-sm font-bold text-rose-400 flex items-center gap-2">
+            <AlertOctagon size={16} /> Danger Zone
           </h2>
         </div>
-        <div className="p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-sm font-bold text-zinc-100">Reset Database / Delete All Leads</h3>
-              <p className="text-sm text-zinc-400 mt-1">Permanently remove all leads from localStorage.</p>
-            </div>
-            <button 
-              onClick={handleReset}
-              className="flex items-center gap-2 px-4 py-2 bg-rose-500/10 border border-rose-500/20 text-rose-500 hover:bg-rose-500/20 font-semibold rounded-lg text-sm transition-colors"
-            >
-              <Trash2 size={16} /> Reset Database
-            </button>
+
+        <div className="p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <h3 className="text-xs font-bold text-zinc-100">Reset Local Database</h3>
+            <p className="text-xs text-zinc-400 mt-0.5">
+              Permanently purges all leads from localStorage. Ensure you export a JSON backup beforehand.
+            </p>
           </div>
+
+          <button
+            onClick={() => setResetModalOpen(true)}
+            className="px-4 py-2 bg-rose-950/40 hover:bg-rose-900/50 border border-rose-900 text-rose-400 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
+          >
+            <Trash2 size={14} /> Purge & Reset Database
+          </button>
         </div>
       </div>
+
+      {/* Reset Confirmation Modal */}
+      {resetModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4 backdrop-blur-xs">
+          <div className="bg-zinc-900 border border-rose-900 rounded-xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center gap-3 text-rose-400">
+              <AlertOctagon size={28} />
+              <div>
+                <h3 className="text-base font-bold text-zinc-100">Permanent Database Purge</h3>
+                <p className="text-xs text-zinc-400">This action cannot be undone.</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-zinc-300 leading-relaxed">
+              This will permanently delete all leads, warming logs, and DM history from this browser. Type <strong className="text-rose-400">RESET</strong> below to confirm.
+            </p>
+
+            <div>
+              <input
+                type="text"
+                placeholder="Type RESET"
+                value={resetConfirmationInput}
+                onChange={e => setResetConfirmationInput(e.target.value)}
+                className="w-full bg-zinc-950 border border-rose-900/60 rounded-lg p-2.5 text-xs text-zinc-100 font-mono tracking-widest focus:ring-rose-500"
+              />
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={() => {
+                  setResetModalOpen(false);
+                  setResetConfirmationInput("");
+                }}
+                className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmReset}
+                disabled={resetConfirmationInput !== "RESET"}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                Permanently Delete All Leads
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function HealthStat({ label, value, color }: { label: string; value: number; color?: string }) {
+function HealthCard({ label, value, color }: { label: string; value: number; color?: string }) {
   return (
-    <div className="bg-zinc-800/30 rounded p-3">
-      <p className="text-[10px] font-bold uppercase text-zinc-500">{label}</p>
-      <p className={`text-xl font-bold mt-1 ${color || 'text-zinc-100'}`}>{value}</p>
+    <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
+      <span className="text-[10px] uppercase font-bold text-zinc-500">{label}</span>
+      <p className={`text-xl font-bold mt-0.5 ${color || "text-zinc-100"}`}>{value}</p>
     </div>
   );
 }

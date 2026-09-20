@@ -1,39 +1,39 @@
-import { Lead, LeadScore } from "@/types";
+import { Lead, FitStatus } from "@/types";
 
 /**
- * Calculates a rule-based score for a lead (1 to 5).
- * Higher score means a better opportunity for Veltris services.
+ * Evaluates a lead against the aesthetic clinic ICP rules and returns a FitStatus.
  */
-export function calculateRuleBasedScore(lead: Lead): LeadScore {
-  let score = 2; // Baseline score
-  
-  const v = lead.verification;
+export function calculateLeadFit(lead: Lead): { fit: FitStatus; reasons: string[] } {
+  const reasons: string[] = [];
 
-  // Immediate rejections or strong negatives
-  if (v.isChainOrFranchise) return 1;
-  if (!v.isActive) return 1;
-  
-  if (v.websiteQuality === "Modern website") return 1; // Unlikely to need web services
-
-  // Positive signals for needing a website
-  if (!v.hasWebsite) score += 2;
-  else if (["Broken website", "Linktree only", "Outdated website", "Weak website"].includes(v.websiteQuality)) {
-    score += 1;
+  // Check Instagram
+  if (!lead.instagram_handle) {
+    return { fit: "Reject", reasons: ["Missing Instagram handle"] };
   }
 
-  // Social presence (active business but bad/no website = higher score)
-  if (v.hasInstagram || v.hasFacebook) {
-    if (!v.hasWebsite) score += 1; 
+  // Follower range check
+  if (lead.follower_count !== null) {
+    if (lead.follower_count < 1000) {
+      reasons.push("Followers below ICP minimum (1,000)");
+    } else if (lead.follower_count > 25000) {
+      reasons.push("Followers exceed ICP maximum (25,000)");
+    }
   }
 
-  // Good reviews indicate an established business that can afford a website
-  if (v.reviewCount && v.reviewCount > 20 && v.reviewRating && v.reviewRating > 4.0) {
-    score += 1;
+  // Booking link check
+  if (!lead.booking_link) {
+    reasons.push("High friction: No automated booking link found on profile");
   }
 
-  // Cap score between 1 and 5
-  if (score > 5) return 5;
-  if (score < 1) return 1;
+  // Prior contact
+  if (lead.prior_contact_status && lead.prior_contact_status !== "None") {
+    reasons.push(`Prior contact history exists: ${lead.prior_contact_status}`);
+    return { fit: "Verify", reasons };
+  }
 
-  return score as LeadScore;
+  if (reasons.length === 0) {
+    return { fit: "Priority", reasons: ["Meets all primary ICP qualification rules"] };
+  }
+
+  return { fit: "Viable", reasons };
 }

@@ -2,7 +2,7 @@ import { Lead } from "@/types";
 
 export interface DiscoveryProvider {
   /**
-   * Identifies the provider internally (e.g., 'csv', 'manual', 'google-maps')
+   * Identifies the provider internally (e.g., 'csv', 'manual')
    */
   id: string;
 
@@ -19,10 +19,10 @@ export interface DiscoveryProvider {
   /**
    * Initializes or authenticates the provider if necessary.
    */
-  initialize?: (config?: any) => Promise<void>;
+  initialize?: (config?: Record<string, unknown>) => Promise<void>;
 
   /**
    * Executes the lead discovery process.
    */
-  discover(params: any): Promise<Partial<Lead>[]>;
+  discover(params: unknown): Promise<Lead[]>;
 }

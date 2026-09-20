@@ -15,14 +15,14 @@ export async function POST(req: Request) {
 
     const provider = new GeminiProvider();
     const analysis = await provider.analyzeLead(lead);
-    
+
     return NextResponse.json(analysis);
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Analyze API error:", error);
-    
-    // Provide explicit fallback rather than crashing
+    const message = error instanceof Error ? error.message : "An unexpected error occurred during AI analysis";
+
     return NextResponse.json(
-      { error: "GENERATION_FAILED", message: error.message },
+      { error: "GENERATION_FAILED", message },
       { status: 500 }
     );
   }
